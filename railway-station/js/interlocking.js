@@ -133,11 +133,11 @@
     return Object.values(best);
   };
 
-  // Участок приближения светофора: для входного — оба блок-участка перед ним.
+  // Участок приближения светофора: для входного — два ближних блок-участка перед ним.
   function approachSecs(sig) {
     if (sig.kind === 'entry') {
       const sp = Object.values(RS.LAYOUT.spawns).find((x) => x.entry === sig.id);
-      if (sp) return sp.approach;
+      if (sp) return sp.approach.slice(-2);
     }
     return [T.segs[sig.seg].sec];
   }
@@ -356,13 +356,35 @@
   const CLOSED = new Set(['R', 'RW', 'W']);
   const REDUCED = new Set(['YY', 'YFY']);
 
+  // Проходные светофоры (трёхзначная АБ): красный — блок-участок за светофором занят,
+  // жёлтый — следующий светофор закрыт, зелёный — открыт. Предвходной при двух жёлтых
+  // на входном горит жёлтым мигающим. Порядок расчёта: сначала следующий по ходу светофор.
+  const BL = RS.LAYOUT.blockLogic;
+  function chain(id) {
+    let x = id, depth = 0;
+    while (BL[x].next && BL[BL[x].next]) { x = BL[x].next; depth++; }
+    return { depth, end: BL[x].next };
+  }
+  const byDepth = (a, b) => chain(a).depth - chain(b).depth;
+  const DEPART_BLOCKS = Object.keys(BL).filter((id) => !chain(id).end).sort(byDepth);
+  const APPROACH_BLOCKS = Object.keys(BL).filter((id) => chain(id).end).sort(byDepth);
+
+  function blockAspect(id) {
+    const bl = BL[id];
+    if (T.sections[bl.protects].occupied) return 'R';
+    if (!bl.next) return 'G';
+    const nxt = T.signals[bl.next];
+    if (nxt.aspect === 'R' || nxt.aspect === 'RW') return 'Y';
+    if (nxt.kind === 'entry' && REDUCED.has(nxt.aspect)) return 'YF';
+    return 'G';
+  }
+
   function computeAspects() {
     const S = T.signals;
     const routeOf = {};
     for (const r of IL.routes) if (!r.cancelling) routeOf[r.start] = r;
-    const BL = RS.LAYOUT.blockLogic;
 
-    for (const id of ['3', '4']) S[id].aspect = T.sections[BL[id].protects].occupied ? 'R' : 'G';
+    for (const id of DEPART_BLOCKS) S[id].aspect = blockAspect(id);
 
     const inviteOn = (sig, r) => r && r.invite && !r.used && sig.invite > 0 && switchesReady(r);
 
@@ -387,13 +409,7 @@
         else sig.aspect = closed ? 'Y' : REDUCED.has(a2) ? 'YF' : 'G';
       } else sig.aspect = inviteOn(sig, r) ? 'RW' : 'R';
     }
-    for (const id of ['1', '2']) {
-      const nxt = S[BL[id].next].aspect;
-      if (T.sections[BL[id].protects].occupied) S[id].aspect = 'R';
-      else if (nxt === 'R' || nxt === 'RW') S[id].aspect = 'Y';
-      else if (REDUCED.has(nxt)) S[id].aspect = 'YF';
-      else S[id].aspect = 'G';
-    }
+    for (const id of APPROACH_BLOCKS) S[id].aspect = blockAspect(id);
     for (const sig of Object.values(S)) {
       if (sig.kind !== 'shunt') continue;
       const r = routeOf[sig.id];

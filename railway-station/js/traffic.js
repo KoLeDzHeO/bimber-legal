@@ -267,8 +267,20 @@
     TYPES,
   };
 
-  // entry — нитка расписания (если поезд идёт по графику).
-  Traffic.spawn = function (dirKey, cat, entry) {
+  // Расстояние (м) от головы поезда до входного светофора, пока поезд на перегоне.
+  Traffic.distToEntry = function (c) {
+    const k = c.info && c.info.dir;
+    if (!k) return null;
+    const sp = LAY.spawns[k];
+    const tdir = k === 'odd' ? 1 : -1;
+    const p = tdir === C.screenDir(c) ? C.frontPoint(c) : C.rearPoint(c);
+    if (tdir > 0 ? p[0] > sp.entryX : p[0] < sp.entryX) return null;
+    return tdir > 0 ? T.alongX(sp.segs, p[0], sp.entryX) : T.alongX(sp.segs, sp.entryX, p[0]);
+  };
+
+  // entry — нитка расписания (если поезд идёт по графику);
+  // advance — на сколько метров поезд уже продвинулся по перегону.
+  Traffic.spawn = function (dirKey, cat, entry, advance) {
     const sp = LAY.spawns[dirKey];
     const odd = dirKey === 'odd';
     if (T.sections[sp.approach[0]].occupied) return null;
@@ -288,8 +300,9 @@
     }
     // vehicles: от хвоста к голове; голова поезда — по направлению движения
     const vehicles = m.vehicles.slice().reverse();
-    const seg = T.segs[sp.seg];
-    const frontOff = sp.dir > 0 ? (sp.frontX - seg.xa) * T.M : (seg.xb - sp.frontX) * T.M;
+    // поезд появляется в начале дальнего блок-участка целиком
+    const len = vehicles.reduce((s, v) => s + v.len, 0);
+    const frontOff = Math.min(T.segs[sp.seg].len - 5, len + 30);
     const info = {
       num: m.num, cat, dir: dirKey, title: (entry && entry.title) || ty.title, stopAtPlatform: !!m.stopAtPlatform, dwell: m.dwell,
       setOff: m.setOff || 0, note: m.note || '', plan: entry || null,
@@ -298,45 +311,62 @@
     };
     const c = C.create({ vehicles, seg: sp.seg, dir: sp.dir, frontOff, info, ctl: 'ai', v: kmh(m.v0 || 60), ai: { phase: 'run' } });
     c.move = 1;
+    if (advance > 0) C.moveBy(c, advance);
+    const headSec = T.segs[c.chain[c.chain.length - 1].seg].sec;
     const H = RS.Schedule && RS.Schedule.hm;
     const planTxt = !entry ? '' : entry.kind === 'pass'
       ? '. По графику проследование в ' + H(entry.arr) + ' по пути ' + T.trackName(entry.track)
       : '. По графику прибытие ' + H(entry.arr) + ', отправление ' + H(entry.dep) + ', путь ' + T.trackName(entry.track);
     RS.Log.add('Поезд №' + info.num + ' (' + info.title.toLowerCase() + ', ' + c.vehicles.length + ' ед., ' +
-      Math.round(c.length) + ' м) вступил на участок приближения ' + sp.approach[0] + ' со стороны ст. ' + info.from + planTxt, 'route');
+      Math.round(c.length) + ' м) ' + (advance > 0 ? 'следует по перегону, участок ' : 'вступил на перегон, участок ') + headSec +
+      ', со стороны ст. ' + info.from + planTxt, 'route');
     return c;
   };
 
   // Автодействие: приём на путь по графику (или на главный) и отправление без участия ДСП.
-  // Поезд с плановой стоянкой отправляется не раньше чем за минуту до времени по графику.
+  // Маршрут приёма задаётся для ближайшего к входному поезда, когда до него меньше 4 км;
+  // поезд с плановой стоянкой отправляется не раньше чем за минуту до времени по графику.
+  function setExit(k, track) {
+    const IL = RS.IL;
+    const exitSig = (k === 'odd' ? 'Н' : 'Ч') + LAY.tracks[track].name;
+    if (!T.signals[exitSig] || IL.routeFrom(exitSig)) return;
+    const d = IL.findRoutes(exitSig, 'train')[0];
+    if (d && IL.check(d).ok) IL.set(d);
+  }
+
   function autoRoute() {
     const IL = RS.IL;
     const now = RS.Sim.t;
-    for (const c of C.list) {
-      // сборные поезда принимает ДСП: с ними нужна маневровая работа
-      if (c.ctl !== 'ai' || !c.ai || !c.info.dir || c.info.cat === 'local') continue;
-      const k = c.info.dir;
+    for (const k of ['odd', 'even']) {
       const sp = LAY.spawns[k];
-      const plan = c.info.plan;
-      const main = k === 'odd' ? 'IП' : 'IIП';
-      const secs = C.sectionsOf(c);
-      const onApproach = secs.some((s) => sp.approach.includes(s));
-      if (onApproach && !IL.routeFrom(sp.entry)) {
+      let best = null, bd = Infinity;
+      for (const c of C.list) {
+        if (!c.info || c.info.dir !== k || !c.ai || c.ai.inStation) continue;
+        const d = Traffic.distToEntry(c);
+        if (d !== null && d < bd) { bd = d; best = c; }
+      }
+      // сборные поезда принимает ДСП: с ними нужна маневровая работа
+      if (!best || bd > 4000 || best.ctl !== 'ai' || best.info.cat === 'local') continue;
+      if (!IL.routeFrom(sp.entry)) {
+        const main = k === 'odd' ? 'IП' : 'IIП';
+        const plan = best.info.plan;
         const cands = IL.findRoutes(sp.entry, 'train');
         for (const t of [plan && plan.track, main]) {
           const cand = t && cands.find((x) => x.dest === t);
           if (cand && IL.check(cand).ok) { IL.set(cand); break; }
         }
       }
+      // поезд без остановки: сразу и отправление, чтобы входной открылся на проход
       const r = IL.routeFrom(sp.entry);
-      const track = (onApproach && r && r.dest) || secs.find((s) => LAY.tracks[s]);
-      if (!track || !LAY.tracks[track]) continue;
-      const exitSig = (k === 'odd' ? 'Н' : 'Ч') + LAY.tracks[track].name;
+      if (r && LAY.tracks[r.dest] && !plannedStop(best)) setExit(k, r.dest);
+    }
+    for (const c of C.list) {
+      if (c.ctl !== 'ai' || !c.ai || !c.ai.inStation || !c.info.dir || c.info.cat === 'local') continue;
+      const track = C.sectionsOf(c).find((s) => LAY.tracks[s]);
+      if (!track) continue;
+      const plan = c.info.plan;
       const mayGo = !plannedStop(c) || (c.ai.phase === 'ready' && (!plan || now >= plan.dep - 60));
-      if (mayGo && T.signals[exitSig] && !IL.routeFrom(exitSig)) {
-        const d = IL.findRoutes(exitSig, 'train')[0];
-        if (d && IL.check(d).ok) IL.set(d);
-      }
+      if (mayGo) setExit(c.info.dir, track);
     }
   }
 

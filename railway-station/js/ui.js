@@ -403,25 +403,28 @@
       if (!info.dir) continue;
       const appr = LAY.spawns[info.dir].approach;
       if (!C.sectionsOf(c).some((s) => appr.includes(s))) continue;
-      const tdir = info.dir === 'odd' ? 1 : -1;
-      const p = tdir === C.screenDir(c) ? C.frontPoint(c) : C.rearPoint(c);
-      const d = info.dir === 'odd' ? (150 - p[0]) * T.M : (p[0] - 1270) * T.M;
-      if (d >= 0) items[info.dir].push({ c, d });
+      const d = RS.Traffic.distToEntry(c);
+      if (d !== null) items[info.dir].push({ c, d });
     }
     for (const k of ['odd', 'even']) {
       const box = $(k === 'odd' ? '#apLeft' : '#apRight');
       const entry = LAY.spawns[k].entry;
+      items[k].sort((a, b) => a.d - b.d);
       const key = items[k].map((i) => i.c.id + ':' + Math.round(i.d / 100) + ':' + Math.round(i.c.v * 3.6)).join('|') + ':' + Math.floor(RS.Sim.t / 60);
       if (box.dataset.key === key) continue;
       box.dataset.key = key;
       box.innerHTML = '';
-      for (const { c, d } of items[k]) {
+      // три ближайших к станции поезда; остальные видны на перегоне
+      for (const { c, d } of items[k].slice(0, 3)) {
         const st = c.v < 0.05;
+        const m = /Закрыт светофор (\S+)/.exec(c.status || '');
+        const held = m && m[1] !== entry ? 'стоит у светофора ' + m[1] : 'стоит у входного ' + entry;
         box.append(h('button', { class: 'ap-chip' + (st ? ' stopped' : ''), title: 'Открыть карточку поезда', onclick: () => select(c.id) },
-          h('b', {}, '№' + c.info.num), h('span', { class: 'ap-d' }, (d / 1000).toFixed(1) + ' км до ' + entry),
-          h('span', { class: 'ap-s' }, c.info.title + ', ' + Math.round(c.length) + ' м · ' + (st ? 'стоит у закрытого ' + entry : Math.round(c.v * 3.6) + ' км/ч')),
+          h('b', {}, '№' + c.info.num), h('span', { class: 'ap-d' }, (d / 1000).toFixed(1).replace('.', ',') + ' км до ' + entry),
+          h('span', { class: 'ap-s' }, c.info.title + ', ' + Math.round(c.length) + ' м · ' + (st ? held : Math.round(c.v * 3.6) + ' км/ч')),
           c.info.plan ? h('span', { class: 'ap-s ap-plan' }, planChip(c.info.plan)) : null));
       }
+      if (items[k].length > 3) box.append(h('span', { class: 'ap-more' }, 'и ещё ' + (items[k].length - 3) + ' на перегоне'));
     }
   }
 
@@ -605,6 +608,11 @@
     document.querySelectorAll('[data-tab]').forEach((b) => (b.onclick = () => showTab(b.dataset.tab)));
     document.querySelectorAll('[data-speed]').forEach((b) => (b.onclick = () => setSpeed(Number(b.dataset.speed))));
     $('#btnHelp').onclick = () => { $('#help').hidden = false; };
+    $('#btnPanel').onclick = () => {
+      const wide = $('.main').classList.toggle('no-side');
+      $('#btnPanel').setAttribute('aria-pressed', String(wide));
+      $('#btnPanel').textContent = wide ? 'Показать панель' : 'Табло шире';
+    };
     $('#helpClose').onclick = () => { $('#help').hidden = true; };
     $('#help').addEventListener('click', (e) => { if (e.target.id === 'help') $('#help').hidden = true; });
     document.addEventListener('keydown', (e) => {

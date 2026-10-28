@@ -23,11 +23,17 @@
   }
 
   const VMAX = { pass: 120, subur: 120, freight: 80, local: 70, light: 100 };
-  // За сколько секунд до времени по графику поезд вступает на участок приближения:
-  // от места появления до остановки на станции около 3,0 км, до выходного — 3,2 км.
-  S.lead = (cat, kind) => kind === 'pass'
-    ? Math.round(3155 / ((0.9 * VMAX[cat]) / 3.6) + 45)
-    : Math.round(3040 / ((0.75 * VMAX[cat]) / 3.6) + 30);
+  // За сколько секунд до времени по графику поезд появляется в начале перегона: время хода
+  // по шести блок-участкам и по станции до остановки (около 1,1 км) или до выходного (1,3 км).
+  const TYP_LEN = { pass: 400, subur: 220, freight: 650, local: 320, light: 35 };
+  S.approachLen = (dir) => LAY.spawns[dir].segs.reduce((s, id) => s + RS.Track.segs[id].len, 0);
+  // Средняя скорость хода (доля от максимальной) и поправка подобраны по прогону модели.
+  S.lead = function (cat, kind, dir) {
+    const run = S.approachLen(dir) - TYP_LEN[cat] - 30 + (kind === 'pass' ? 1315 : 1130);
+    const passenger = cat === 'pass' || cat === 'subur';
+    const [f, slack] = kind === 'pass' ? [1, 0] : passenger ? [0.85, -40] : [0.8, -20];
+    return Math.round(run / ((f * VMAX[cat]) / 3.6) + slack);
+  };
 
   // Диапазоны номеров: скорые 1–148, пассажирские 301–398, пригородные 6001–6998,
   // грузовые 2001–2998, сборные 3401–3498, локомотивы резервом 4001–4998.
@@ -54,7 +60,7 @@
     if (e.kind === 'pass') e.dep = e.arr;
     e.from = e.dir === 'odd' ? LAY.neighbours.left : LAY.neighbours.right;
     e.to = e.dir === 'odd' ? LAY.neighbours.right : LAY.neighbours.left;
-    e.spawnAt = e.arr - S.lead(e.cat, e.kind);
+    e.spawnAt = e.arr - S.lead(e.cat, e.kind, e.dir);
     S.entries.push(e);
     return e;
   }
@@ -115,6 +121,22 @@
   S.update = function () {
     const now = RS.Sim.t;
     S.ensure(now);
+    // к началу смены поезда, которые по графику уже вышли на перегон, ставятся на него
+    if (!S.warmed) {
+      S.warmed = true;
+      for (const dir of ['odd', 'even']) {
+        const e = S.entries.find((x) => x.dir === dir && x.state === 'plan' && x.spawnAt < now);
+        if (!e) continue;
+        const v = (0.85 * VMAX[e.cat]) / 3.6;
+        const adv = Math.max(0, Math.min((now - e.spawnAt) * v, S.approachLen(dir) - 2500));
+        const c = RS.Traffic.spawn(dir, e.cat, e, adv);
+        if (c) {
+          c.v = v;
+          e.state = 'approach';
+          e.spawnFact = e.spawnAt;
+        }
+      }
+    }
     // выпуск поездов на подходы: по одному на направление, в порядке графика
     for (const dir of ['odd', 'even']) {
       const e = S.entries.find((x) => x.dir === dir && x.state === 'plan' && x.spawnAt <= now);
@@ -192,7 +214,13 @@
     const c = S.consistOf(e);
     if (!c) return { text: 'в маневровой работе', cls: 'wait' };
     if (e.state === 'approach') {
-      return { text: (c.v < 0.05 ? 'стоит у входного' : 'на подходе') + lateTxt, cls: c.v < 0.05 || late > 0 ? 'late' : 'appr' };
+      let txt = 'на подходе';
+      if (c.v < 0.05) {
+        const m = /Закрыт светофор (\S+)/.exec(c.status || '');
+        const sig = m && RS.Track.signals[m[1]];
+        txt = !sig ? 'стоит на перегоне' : sig.kind === 'entry' ? 'стоит у входного' : 'стоит на перегоне у светофора ' + sig.name;
+      }
+      return { text: txt + lateTxt, cls: c.v < 0.05 || late > 0 ? 'late' : 'appr' };
     }
     const ai = c.ai || {};
     if (ai.phase === 'dwell') {

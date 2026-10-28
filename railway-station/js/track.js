@@ -23,16 +23,18 @@
       T.nodes[id] = { id, x: v[0], y: v[1], end: v[2] || null, segs: [] };
     }
     for (const s of L.segs) {
-      const [id, a, b, sec, via] = s;
+      const [id, a, b, sec, via, lenM] = s;
       const na = T.nodes[a], nb = T.nodes[b];
       const pts = [[na.x, na.y], ...(via || []), [nb.x, nb.y]];
       for (let i = 1; i < pts.length; i++) {
         if (!(pts[i][0] > pts[i - 1][0])) throw new Error('Отрезок ' + id + ' должен идти слева направо');
       }
       const diag = pts.some((p, i) => i > 0 && p[1] !== pts[i - 1][1]);
+      // mpu — метров в единице схемы: на станции M, на сжатых отрезках перегона больше
+      const mpu = lenM ? lenM / (nb.x - na.x) : T.M;
       const seg = {
-        id, a, b, sec, pts, xa: na.x, xb: nb.x,
-        len: (nb.x - na.x) * T.M,
+        id, a, b, sec, pts, xa: na.x, xb: nb.x, mpu,
+        len: (nb.x - na.x) * mpu,
         diag,
         vmax: 120,
       };
@@ -92,7 +94,21 @@
 
   // x точки на направленном отрезке на расстоянии off (м) от его начала.
   T.xAt = function (seg, dir, off) {
-    return dir > 0 ? seg.xa + off / T.M : seg.xb - off / T.M;
+    return dir > 0 ? seg.xa + off / seg.mpu : seg.xb - off / seg.mpu;
+  };
+
+  // Смещение (м) точки x от начала направленного отрезка.
+  T.offAt = (seg, dir, x) => (dir > 0 ? x - seg.xa : seg.xb - x) * seg.mpu;
+
+  // Путь в метрах по перечисленным отрезкам между координатами x1 < x2.
+  T.alongX = function (segIds, x1, x2) {
+    let d = 0;
+    for (const id of segIds) {
+      const s = T.segs[id];
+      const a = Math.max(x1, s.xa), b = Math.min(x2, s.xb);
+      if (b > a) d += (b - a) * s.mpu;
+    }
+    return d;
   };
 
   T.pointAt = function (seg, dir, off) {

@@ -79,10 +79,14 @@
     text(g, 710, y7 + 40, 'Пассажирское здание · пост ЭЦ', 'bld-label');
     el('rect', { x: 630, y: y8 - 36, width: 280, height: 22, rx: 2, class: 'building' }, g);
     text(g, 770, y8 - 21, 'Грузовой двор · крытый склад', 'bld-label');
-    text(g, 4, yI + 54, '← ст. ' + LAY.neighbours.left, 'dir-label', 'start');
-    text(g, 4, yI + 68, 'нечётные поезда прибывают →', 'dir-sub', 'start');
-    text(g, 1416, yII - 62, 'ст. ' + LAY.neighbours.right + ' →', 'dir-label', 'end');
-    text(g, 1416, yII - 48, '← чётные поезда прибывают', 'dir-sub', 'end');
+    const xl = T.nodes.LIs.x, xr = T.nodes.RIs.x;
+    const km = (dir) => (RS.Schedule.approachLen(dir) / 1000).toFixed(1).replace('.', ',');
+    text(g, xl, yI + 50, '← ст. ' + LAY.neighbours.left, 'dir-label', 'start');
+    text(g, xl, yI + 64, 'перегон ' + km('odd') + ' км, 6 блок-участков на каждом пути', 'dir-sub', 'start');
+    text(g, xl, yI + 78, 'нечётные поезда прибывают →', 'dir-sub', 'start');
+    text(g, xr, yII - 74, 'ст. ' + LAY.neighbours.right + ' →', 'dir-label', 'end');
+    text(g, xr, yII - 60, 'перегон ' + km('even') + ' км, 6 блок-участков на каждом пути', 'dir-sub', 'end');
+    text(g, xr, yII - 46, '← чётные поезда прибывают', 'dir-sub', 'end');
     // граница станции (по входным светофорам)
     for (const x of [150, 1270]) el('line', { x1: x, y1: yII - 30, x2: x, y2: yI + 26, class: 'boundary' }, g);
     text(g, 150, yII - 34, 'граница ст.', 'tiny');
@@ -112,19 +116,18 @@
     // номера путей
     for (const [sec, tr] of Object.entries(LAY.tracks)) {
       const seg = T.segs[T.sections[sec].segs[0]];
-      const xs = sec === '8П' ? [600, 896] : sec === '10П' ? [-100] : sec === '9П' ? [1500] : [524, 896];
+      const xs = sec === '8П' ? [600, 896] : sec === '10П' ? [10] : sec === '9П' ? [1420] : [524, 896];
       for (const x of xs) {
         const y = T.yAt(seg, x) - 7;
         el('rect', { x: x - 13, y: y - 12, width: 26, height: 14, rx: 2, class: 'trk-tag' }, R.gLbl);
         text(R.gLbl, x, y - 1.5, tr.name, 'trk-num');
       }
     }
-    // названия участков на перегонах
-    for (const sec of ['НП1', 'НП2', 'ЧУ1', 'ЧУ2', 'НУ1', 'НУ2', 'ЧП1', 'ЧП2']) {
+    // названия блок-участков на перегонах — между путями, светофоры стоят снаружи
+    for (const sec of Object.keys(T.sections).filter((s) => /^(НП|ЧП|НУ|ЧУ)\d$/.test(s))) {
       const seg = T.segs[T.sections[sec].segs[0]];
-      const x1 = Math.max(seg.xa, -60), x2 = Math.min(seg.xb, 1480);
       const up = seg.pts[0][1] === LAY.Y(160);
-      text(R.gLbl, (x1 + x2) / 2, seg.pts[0][1] + (up ? -8 : 17), sec, 'sec-label');
+      text(R.gLbl, (seg.xa + seg.xb) / 2, seg.pts[0][1] + (up ? 14 : -6), sec, 'sec-label');
     }
   }
 

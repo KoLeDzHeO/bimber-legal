@@ -434,7 +434,7 @@
     for (const p of scan.path) {
       if (p.seg !== seg) continue;
       const s = T.segs[seg];
-      const off = p.dir > 0 ? (x - s.xa) * T.M : (s.xb - x) * T.M;
+      const off = T.offAt(s, p.dir, x);
       return p.d0 + off;
     }
     return null;
