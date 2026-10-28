@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<!-- page:start -->
+<title>Станция Ольховка</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=PT+Mono&family=PT+Sans+Narrow:wght@400;700&family=PT+Sans:ital,wght@0,400;0,700;1,400&display=swap">
+<link rel="stylesheet" href="css/style.css">
+<!-- page:head-end -->
+</head>
+<body>
+<!-- page:body -->
+<div class="app">
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo" aria-hidden="true">ЭЦ</span>
+      <div>
+        <h1>Станция Ольховка</h1>
+        <p>АРМ ДСП · двухпутный участок, автоблокировка, сигнализация по ИСИ</p>
+      </div>
+    </div>
+    <div class="clock-wrap">
+      <span class="clock-cap">модельное время</span>
+      <span class="clock" id="clock">08:00:00</span>
+    </div>
+    <div class="speed" role="group" aria-label="Скорость модельного времени">
+      <button class="seg-btn" data-speed="0" aria-pressed="false" title="Пауза (пробел)">Пауза</button>
+      <button class="seg-btn" data-speed="1" aria-pressed="true">×1</button>
+      <button class="seg-btn" data-speed="3" aria-pressed="false">×3</button>
+      <button class="seg-btn" data-speed="6" aria-pressed="false">×6</button>
+      <button class="seg-btn" data-speed="12" aria-pressed="false">×12</button>
+    </div>
+    <button class="btn ghost" id="btnHelp">Сигналы и справка</button>
+  </header>
+
+  <div class="toolbar">
+    <div class="modes" role="group" aria-label="Режим работы с табло">
+      <button class="mode m-train" data-mode="train" aria-pressed="true"><span class="key">1</span>Поездной</button>
+      <button class="mode m-shunt" data-mode="shunt" aria-pressed="false"><span class="key">2</span>Маневровый</button>
+      <button class="mode m-cancel" data-mode="cancel" aria-pressed="false"><span class="key">3</span>Отмена</button>
+      <button class="mode m-switch" data-mode="switch" aria-pressed="false"><span class="key">4</span>Стрелки</button>
+      <button class="mode m-invite" data-mode="invite" aria-pressed="false"><span class="key">5</span>Пригласительный</button>
+    </div>
+    <p class="hint" id="hint" aria-live="polite"></p>
+  </div>
+
+  <main class="main">
+    <section class="board" aria-label="Табло станции">
+      <svg id="map" role="img" aria-label="Схема станции Ольховка" preserveAspectRatio="xMidYMid meet"></svg>
+      <div class="approach left" id="apLeft" aria-label="Поезда на подходе с нечётного направления"></div>
+      <div class="approach right" id="apRight" aria-label="Поезда на подходе с чётного направления"></div>
+      <div class="zoom" role="group" aria-label="Масштаб">
+        <button class="btn icon" id="zoomIn" title="Приблизить" aria-label="Приблизить">+</button>
+        <button class="btn icon" id="zoomOut" title="Отдалить" aria-label="Отдалить">−</button>
+        <button class="btn icon" id="zoomFit" title="Вся станция" aria-label="Показать всю станцию">⤢</button>
+      </div>
+      <ul class="legend" aria-label="Индикация рельсовых цепей">
+        <li><i class="lg free"></i>свободна</li>
+        <li><i class="lg train"></i>поездной маршрут</li>
+        <li><i class="lg shunt"></i>маневровый маршрут</li>
+        <li><i class="lg occ"></i>занята</li>
+      </ul>
+    </section>
+
+    <aside class="side">
+      <nav class="tabs" role="tablist">
+        <button role="tab" data-tab="trains" aria-selected="true">Составы <span class="cnt" id="cntTrains">0</span></button>
+        <button role="tab" data-tab="routes" aria-selected="false">Маршруты <span class="cnt" id="cntRoutes">0</span></button>
+        <button role="tab" data-tab="log" aria-selected="false">Журнал</button>
+        <button role="tab" data-tab="flow" aria-selected="false">Движение</button>
+      </nav>
+
+      <div class="tab" id="tab-trains" role="tabpanel">
+        <div class="card" id="trainCard"></div>
+        <ul class="tlist" id="trainList"></ul>
+      </div>
+
+      <div class="tab" id="tab-routes" role="tabpanel" hidden>
+        <ul class="rlist" id="routeList"></ul>
+      </div>
+
+      <div class="tab" id="tab-log" role="tabpanel" hidden>
+        <ol class="log" id="logList"></ol>
+      </div>
+
+      <div class="tab" id="tab-flow" role="tabpanel" hidden>
+        <section class="psec">
+          <h4>Случайные поезда</h4>
+          <label class="check" for="autoGen"><input type="checkbox" id="autoGen" checked> Поезда подходят со стороны обоих перегонов</label>
+          <label class="check" for="autoRoute"><input type="checkbox" id="autoRoute"> Автодействие: приём и отправление по главным путям I и II без участия ДСП</label>
+          <label class="field" for="genGap"><span>Интервал</span><input type="range" id="genGap" min="3" max="15" value="5"><output id="genGapOut" for="genGap"></output></label>
+          <p class="small muted">Следующий нечётный через <b id="nextOdd">—</b>, чётный через <b id="nextEven">—</b></p>
+          <div class="spawn">
+            <label class="field" for="spawnCat"><span>Вызвать поезд</span>
+              <select id="spawnCat">
+                <option value="">случайный</option>
+                <option value="pass">пассажирский</option>
+                <option value="subur">пригородный</option>
+                <option value="freight">грузовой</option>
+                <option value="local">сборный (с отцепкой)</option>
+                <option value="light">локомотив резервом</option>
+              </select>
+            </label>
+            <div class="spawn-btns">
+              <button class="btn ghost" data-spawn="odd">Нечётный, слева</button>
+              <button class="btn ghost" data-spawn="even">Чётный, справа</button>
+            </div>
+          </div>
+        </section>
+        <section class="psec">
+          <h4>Показатели смены</h4>
+          <dl class="stats">
+            <div><dt>Отправлено поездов</dt><dd id="stPassed">0</dd></div>
+            <div><dt>Принято на пути</dt><dd id="stArrived">0</dd></div>
+            <div><dt>Простой у сигналов, мин</dt><dd id="stWait">0</dd></div>
+            <div><dt>Нарушения</dt><dd id="stInc">0</dd></div>
+          </dl>
+          <ul class="inc" id="incList"></ul>
+        </section>
+      </div>
+    </aside>
+  </main>
+
+  <div class="toasts" id="toasts" aria-live="polite"></div>
+  <div class="modal" id="modal" hidden></div>
+
+  <div class="modal" id="help" hidden>
+    <div class="modal-card wide" role="dialog" aria-modal="true" aria-labelledby="helpTitle">
+      <div class="help-head">
+        <h3 id="helpTitle">Как работать дежурным по станции</h3>
+        <button class="btn ghost sm" id="helpClose">Закрыть</button>
+      </div>
+      <div class="help-cols">
+        <section>
+          <h4>Порядок действий</h4>
+          <ol class="steps">
+            <li><b>Приём.</b> Режим «Поездной», нажмите входной <b>Н</b> (слева) или <b>Ч</b> (справа), затем путь приёма. Пассажирские поезда принимайте на пути I и II — у них платформы.</li>
+            <li><b>Отправление.</b> Нажмите выходной светофор пути (<b>НI, Н3…</b> справа, <b>ЧII, Ч4…</b> слева) — маршрут на перегон задаётся сразу.</li>
+            <li><b>Сквозной пропуск.</b> Задайте сначала отправление, затем приём: входной загорится зелёным (по главному пути) или двумя жёлтыми с верхним мигающим (с отклонением).</li>
+            <li><b>Маневры.</b> Режим «Маневровый», нажмите М1 (путь 10), М2 (путь 9), М4 (путь 8) или выходной светофор и путь назначения. Ведите локомотив вручную в карточке состава, сцепление происходит автоматически, расцепка — кнопкой между вагонами.</li>
+            <li><b>Сборный поезд.</b> Хвостовые вагоны с жёлтой обводкой отцепите и подайте маневровым локомотивом на путь 8 (грузовой двор).</li>
+          </ol>
+          <h4>Индикация на табло</h4>
+          <ul class="legend in-help">
+            <li><i class="lg free"></i>свободная рельсовая цепь</li>
+            <li><i class="lg train"></i>замкнута в поездном маршруте</li>
+            <li><i class="lg shunt"></i>замкнута в маневровом маршруте</li>
+            <li><i class="lg occ"></i>занята подвижным составом</li>
+          </ul>
+          <p class="small muted">Разрыв у стрелки показывает, куда она не переведена. Номер мигает при переводе, красный — стрелка взрезана. Отмена маршрута при занятом участке приближения выполняется с выдержкой времени (3 мин поездной, 1 мин маневровый).</p>
+        </section>
+        <section>
+          <h4>Показания светофоров (ИСИ, автоблокировка)</h4>
+          <ul class="aspects" id="aspectList"></ul>
+          <p class="small muted">Лампы на табло показаны в строку; на мачте они расположены сверху вниз: жёлтый, зелёный, красный, жёлтый, лунно-белый. Скорости: по стрелочным переводам на боковой путь — 40 км/ч, по пригласительному — 20 км/ч, маневры — 40 км/ч локомотивом вперёд и 25 км/ч вагонами вперёд, подъезд к вагонам — 3–5 км/ч.</p>
+        </section>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="js/layout.js"></script>
+<script src="js/track.js"></script>
+<script src="js/interlocking.js"></script>
+<script src="js/consist.js"></script>
+<script src="js/traffic.js"></script>
+<script src="js/render.js"></script>
+<script src="js/ui.js"></script>
+<script src="js/main.js"></script>
+<!-- page:end -->
+</body>
+</html>
