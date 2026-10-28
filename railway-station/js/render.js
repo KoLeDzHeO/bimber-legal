@@ -62,7 +62,7 @@
     drawTracks();
     drawSwitches();
     drawSignals();
-    R.applyView();
+    R.fit();
   };
 
   function drawDecor() {
@@ -318,8 +318,15 @@
     R.svg.setAttribute('viewBox', `${v.x} ${v.y} ${v.w} ${v.h}`);
   };
 
+  // Вся станция с подходами; на узком (портретном) табло — только горловины и пути.
   R.fit = function () {
-    R.view = Object.assign({}, LAY.view);
+    const v = Object.assign({}, LAY.view);
+    const b = R.svg.getBoundingClientRect();
+    if (b.width && b.width / b.height < 1.25) {
+      v.x = 108;
+      v.w = 1204;
+    }
+    R.view = v;
     R.applyView();
   };
 

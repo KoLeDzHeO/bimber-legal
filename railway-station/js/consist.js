@@ -346,7 +346,9 @@
   };
 
   // --- автоматическая защита: просмотр пути впереди ---------------------------------
-  function permits(sig) {
+  // Поезд следует только по поездным показаниям; маневровый лунно-белый для него — стоп.
+  function permits(sig, trainOnly) {
+    if (trainOnly && sig.aspect === 'W') return false;
     return sig.aspect !== 'R' && sig.aspect !== 'B';
   }
 
@@ -354,7 +356,7 @@
     return !!T.sections[T.segs[seg].sec].lock;
   }
 
-  C.scan = function (c, move, maxDist) {
+  C.scan = function (c, move, maxDist, trainOnly) {
     const ch = c.chain;
     let cur, off;
     if (move > 0) {
@@ -391,7 +393,7 @@
       const sig = T.signalFor(node, cur.seg);
       if (sig) {
         out.signals.push({ d, sig });
-        if (!permits(sig)) {
+        if (!permits(sig, trainOnly)) {
           out.stop = d - 5;
           out.why = 'Закрыт светофор ' + sig.name;
           break;

@@ -118,7 +118,7 @@
     const move = travelDir(c) * C.screenDir(c);
     const vmax = kmh((TYPES[info.cat] && TYPES[info.cat].vmax) || 80);
     const b = 0.5;
-    const scan = C.scan(c, move, Math.min(3000, Math.max(500, (c.v * c.v) / (2 * b) + 400)));
+    const scan = C.scan(c, move, Math.min(3000, Math.max(500, (c.v * c.v) / (2 * b) + 400)), true);
     const res = { move, vmax, couple: false, scan };
 
     if (ai.phase === 'dwell') {
@@ -246,7 +246,8 @@
   function autoRoute() {
     const IL = RS.IL;
     for (const c of C.list) {
-      if (c.ctl !== 'ai' || !c.ai || !c.info.dir) continue;
+      // сборные поезда принимает ДСП: с ними нужна маневровая работа
+      if (c.ctl !== 'ai' || !c.ai || !c.info.dir || c.info.cat === 'local') continue;
       const k = c.info.dir;
       const sp = LAY.spawns[k];
       const main = k === 'odd' ? 'IП' : 'IIП';

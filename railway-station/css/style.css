@@ -155,6 +155,11 @@ button { cursor: pointer; }
   background: color-mix(in srgb, var(--scr) 82%, transparent); border-radius: 4px;
 }
 .legend li { display: inline-flex; align-items: center; gap: 6px; }
+.rotate-hint {
+  display: none; position: absolute; left: 10px; right: 10px; bottom: 8px; margin: 0; padding: 6px 10px;
+  font-size: 12.5px; color: var(--ink-2); background: color-mix(in srgb, var(--surface) 90%, transparent);
+  border-radius: 4px; pointer-events: none;
+}
 .lg { display: inline-block; width: 18px; height: 3px; border-radius: 1px; background: var(--trk); }
 .lg.train { background: var(--trk-train); }
 .lg.shunt { background: var(--trk-shunt); }
@@ -407,7 +412,7 @@ button { cursor: pointer; }
   html, body { height: auto; }
   .app { height: auto; grid-template-rows: auto; }
   .main { grid-template-columns: minmax(0, 1fr); }
-  .board { height: 62vh; min-height: 300px; }
+  .board { height: auto; aspect-ratio: 16 / 9; min-height: 280px; max-height: 70vh; }
   .side { max-height: none; }
   .tab { max-height: 70vh; }
   .help-cols { grid-template-columns: 1fr; }
@@ -418,5 +423,10 @@ button { cursor: pointer; }
   .clock { font-size: 18px; }
   .mode { padding-right: 10px; }
   .legend { display: none; }
-  .board { height: 54vh; }
+  .board { aspect-ratio: 4 / 3.4; }
+  .approach { max-width: 60%; }
+  .approach.right { right: 54px; }
+}
+@media (max-width: 520px) and (orientation: portrait) {
+  .rotate-hint { display: block; }
 }
