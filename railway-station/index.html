@@ -69,13 +69,24 @@
 
     <aside class="side">
       <nav class="tabs" role="tablist">
-        <button role="tab" data-tab="trains" aria-selected="true">Составы <span class="cnt" id="cntTrains">0</span></button>
+        <button role="tab" data-tab="sched" aria-selected="true">Расписание</button>
+        <button role="tab" data-tab="trains" aria-selected="false">Составы <span class="cnt" id="cntTrains">0</span></button>
         <button role="tab" data-tab="routes" aria-selected="false">Маршруты <span class="cnt" id="cntRoutes">0</span></button>
         <button role="tab" data-tab="log" aria-selected="false">Журнал</button>
         <button role="tab" data-tab="flow" aria-selected="false">Движение</button>
       </nav>
 
-      <div class="tab" id="tab-trains" role="tabpanel">
+      <div class="tab" id="tab-sched" role="tabpanel">
+        <div class="sched-head">
+          <h4>График движения поездов</h4>
+          <p class="small" id="schedSum"></p>
+          <label class="check small" for="schedDone"><input type="checkbox" id="schedDone"> Показывать все выполненные</label>
+        </div>
+        <ol class="slist" id="schedList"></ol>
+        <p class="small muted sched-note">Слева — время прибытия и отправления по графику (для поездов без остановки — время проследования). Пассажирские поезда отправляются не раньше времени по расписанию. Нажмите на строку, чтобы открыть карточку поезда.</p>
+      </div>
+
+      <div class="tab" id="tab-trains" role="tabpanel" hidden>
         <div class="card" id="trainCard"></div>
         <ul class="tlist" id="trainList"></ul>
       </div>
@@ -90,11 +101,15 @@
 
       <div class="tab" id="tab-flow" role="tabpanel" hidden>
         <section class="psec">
-          <h4>Случайные поезда</h4>
-          <label class="check" for="autoGen"><input type="checkbox" id="autoGen" checked> Поезда подходят со стороны обоих перегонов</label>
-          <label class="check" for="autoRoute"><input type="checkbox" id="autoRoute"> Автодействие: приём и отправление по главным путям I и II без участия ДСП</label>
-          <label class="field" for="genGap"><span>Интервал</span><input type="range" id="genGap" min="3" max="15" value="5"><output id="genGapOut" for="genGap"></output></label>
-          <p class="small muted">Следующий нечётный через <b id="nextOdd">—</b>, чётный через <b id="nextEven">—</b></p>
+          <h4>Откуда берутся поезда</h4>
+          <div class="radios" role="radiogroup" aria-label="Откуда берутся поезда">
+            <label class="check" for="genSched"><input type="radio" name="genMode" id="genSched" value="schedule" checked> По расписанию: нормативный график с плановыми остановками</label>
+            <label class="check" for="genRand"><input type="radio" name="genMode" id="genRand" value="random"> Случайные поезда</label>
+            <label class="check" for="genOff"><input type="radio" name="genMode" id="genOff" value="off"> Только вызванные вручную</label>
+          </div>
+          <label class="check" for="autoRoute"><input type="checkbox" id="autoRoute"> Автодействие: приём на путь по графику и отправление без участия ДСП</label>
+          <label class="field" for="genGap"><span>Интервал случайных</span><input type="range" id="genGap" min="3" max="15" value="5"><output id="genGapOut" for="genGap"></output></label>
+          <p class="small muted">Следующий нечётный: <b id="nextOdd">—</b>, чётный: <b id="nextEven">—</b></p>
           <div class="spawn">
             <label class="field" for="spawnCat"><span>Вызвать поезд</span>
               <select id="spawnCat">
@@ -139,6 +154,7 @@
         <section>
           <h4>Порядок действий</h4>
           <ol class="steps">
+            <li><b>Расписание.</b> На вкладке «Расписание» — график движения: время прибытия и отправления или проследования без остановки, путь по плану и причина стоянки. Готовьте маршруты заранее: опоздания считаются по факту, пассажирские поезда раньше графика не отправляются.</li>
             <li><b>Приём.</b> Режим «Поездной», нажмите входной <b>Н</b> (слева) или <b>Ч</b> (справа), затем путь приёма. Пассажирские поезда принимайте на пути I и II — у них платформы.</li>
             <li><b>Отправление.</b> Нажмите выходной светофор пути (<b>НI, Н3…</b> справа, <b>ЧII, Ч4…</b> слева) — маршрут на перегон задаётся сразу.</li>
             <li><b>Сквозной пропуск.</b> Задайте сначала отправление, затем приём: входной загорится зелёным (по главному пути) или двумя жёлтыми с верхним мигающим (с отклонением).</li>
@@ -169,6 +185,7 @@
 <script src="js/interlocking.js"></script>
 <script src="js/consist.js"></script>
 <script src="js/traffic.js"></script>
+<script src="js/schedule.js"></script>
 <script src="js/render.js"></script>
 <script src="js/ui.js"></script>
 <script src="js/main.js"></script>

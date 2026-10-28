@@ -18,6 +18,7 @@
 
   function boot() {
     RS.Render.init(document.getElementById('map'));
+    RS.Schedule.init(RS.Sim.t);
     RS.Traffic.initial();
     RS.UI.init();
     RS.Consist.computeOcc();

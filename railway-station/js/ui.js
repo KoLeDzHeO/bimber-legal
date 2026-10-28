@@ -273,6 +273,12 @@
     if (q('.tc-limit')) q('.tc-limit').textContent = C.hasLoco(c) ? 'допустимая ' + lim + ' км/ч' : '';
     if (q('.tc-status')) q('.tc-status').textContent = c.status || '';
     if (q('.tc-where')) q('.tc-where').textContent = where(c);
+    const pl = q('.tc-plan-live');
+    if (pl && c.info.plan) {
+      const st = RS.Schedule.status(c.info.plan, RS.Sim.t);
+      if (pl.textContent !== st.text) pl.textContent = st.text;
+      pl.className = 'tc-plan-live small s-' + st.cls;
+    }
     box.querySelectorAll('[data-dir]').forEach((b) => b.setAttribute('aria-pressed', String(Number(b.dataset.dir) === c.setDir)));
     box.querySelectorAll('.gapbtn').forEach((b) => (b.disabled = c.v > 0.05));
   }
@@ -290,6 +296,14 @@
     if (info.from && info.to) meta.push(info.from + ' → ' + info.to);
     meta.push(c.vehicles.length + ' ед., ' + Math.round(c.length) + ' м');
     box.append(h('p', { class: 'muted small' }, meta.join(' · ')));
+    if (info.plan) {
+      const p = info.plan;
+      const H = RS.Schedule.hm;
+      const line = p.kind === 'pass'
+        ? 'Проследование в ' + H(p.arr) + ' по пути ' + T.trackName(p.track) + ', без остановки'
+        : 'Прибытие ' + H(p.arr) + ', отправление ' + H(p.dep) + ', путь ' + T.trackName(p.track) + ' — ' + p.reason;
+      box.append(h('div', { class: 'plan' }, h('span', { class: 'plan-cap' }, 'По графику'), h('div', {}, line), h('div', { class: 'tc-plan-live small' }, '')));
+    }
     if (info.note) box.append(h('p', { class: 'note' }, info.note));
     if (info.ofTrain) box.append(h('p', { class: 'muted small' }, 'Из состава поезда №' + info.ofTrain));
     box.append(h('div', { class: 'tc-row' },
@@ -299,7 +313,7 @@
     if (C.hasLoco(c)) {
       if (c.ctl === 'ai') {
         box.append(h('div', { class: 'tc-ctl' },
-          h('p', { class: 'small' }, 'Автоведение: машинист следует по сигналам, останавливается у платформ и ждёт открытия выходного.'),
+          h('p', { class: 'small' }, 'Автоведение: машинист следует по сигналам, делает плановые остановки и отправляется не раньше времени по графику, когда открыт выходной.'),
           h('button', { class: 'btn primary', onclick: () => takeControl(c) }, 'Взять управление')));
       } else {
         const rng = h('input', { type: 'range', min: 0, max: 40, step: 1, value: c.setV, id: 'spd-' + c.id, 'aria-label': 'Заданная скорость' });
@@ -397,7 +411,7 @@
     for (const k of ['odd', 'even']) {
       const box = $(k === 'odd' ? '#apLeft' : '#apRight');
       const entry = LAY.spawns[k].entry;
-      const key = items[k].map((i) => i.c.id + ':' + Math.round(i.d / 100) + ':' + Math.round(i.c.v * 3.6)).join('|');
+      const key = items[k].map((i) => i.c.id + ':' + Math.round(i.d / 100) + ':' + Math.round(i.c.v * 3.6)).join('|') + ':' + Math.floor(RS.Sim.t / 60);
       if (box.dataset.key === key) continue;
       box.dataset.key = key;
       box.innerHTML = '';
@@ -405,9 +419,76 @@
         const st = c.v < 0.05;
         box.append(h('button', { class: 'ap-chip' + (st ? ' stopped' : ''), title: 'Открыть карточку поезда', onclick: () => select(c.id) },
           h('b', {}, '№' + c.info.num), h('span', { class: 'ap-d' }, (d / 1000).toFixed(1) + ' км до ' + entry),
-          h('span', { class: 'ap-s' }, c.info.title + ', ' + Math.round(c.length) + ' м · ' + (st ? 'стоит у закрытого ' + entry : Math.round(c.v * 3.6) + ' км/ч'))));
+          h('span', { class: 'ap-s' }, c.info.title + ', ' + Math.round(c.length) + ' м · ' + (st ? 'стоит у закрытого ' + entry : Math.round(c.v * 3.6) + ' км/ч')),
+          c.info.plan ? h('span', { class: 'ap-s ap-plan' }, planChip(c.info.plan)) : null));
       }
     }
+  }
+
+  function planChip(p) {
+    const H = RS.Schedule.hm;
+    const late = RS.Schedule.deviation(p, RS.Sim.t);
+    return (p.kind === 'pass' ? 'проследование ' + H(p.arr) : 'прибытие ' + H(p.arr) + ', стоянка') +
+      ' · путь ' + T.trackName(p.track) + (late > 0 ? ' · опаздывает +' + late + ' мин' : '');
+  }
+
+  // --- расписание --------------------------------------------------------------------------------
+  function renderSchedule() {
+    const S = RS.Schedule;
+    const now = RS.Sim.t;
+    const H = S.hm;
+    const sum = S.summary();
+    const sumEl = $('#schedSum');
+    const sumTxt = sum.done
+      ? 'Выполнено ' + sum.done + ' поездов, по графику ' + sum.onTime + ', сумма опозданий ' + sum.late + ' мин'
+      : 'Смена началась: выполненных поездов пока нет';
+    if (sumEl.textContent !== sumTxt) sumEl.textContent = sumTxt;
+    const all = $('#schedDone').checked;
+    const list = S.entries.filter((e) => e.state !== 'cancelled' && e.arr < now + 2.5 * 3600 &&
+      (all || e.state !== 'gone' || e.factDep > now - 12 * 60));
+    const ul = $('#schedList');
+    const key = list.map((e) => e.id + ':' + e.state).join(',');
+    if (ul.dataset.key !== key) {
+      ul.dataset.key = key;
+      ul.innerHTML = '';
+      for (const e of list) {
+        const chip = CAT_CHIP[e.cat] || ['', ''];
+        const stop = e.kind === 'stop';
+        const mins = Math.round((e.dep - e.arr) / 60);
+        ul.append(h('li', { 'data-id': e.id },
+          h('button', { class: 'srow' + (e.state === 'gone' ? ' done' : '') + (e.state === 'approach' || e.state === 'station' ? ' active' : ''), onclick: () => openPlan(e) },
+            h('span', { class: 's-time' }, h('b', {}, H(e.arr)), h('small', { title: stop ? 'отправление' : 'без остановки' }, stop ? H(e.dep) : '—')),
+            h('span', { class: 's-main' },
+              h('span', { class: 's-title' }, h('span', { class: 'chip ' + chip[1] }, chip[0]), h('b', {}, '№' + e.num),
+                h('span', { class: 'muted' }, e.from + ' → ' + e.to)),
+              h('span', { class: 's-desc' }, (stop ? 'стоянка ' + mins + ' мин · ' : 'проследование · ') + 'путь ' + T.trackName(e.track) +
+                (stop ? ' · ' + e.reason : '') + (e.title === 'Скорый' ? ' · скорый' : '')),
+              h('span', { class: 's-fact' }, ''),
+              h('span', { class: 's-state' }, '')))));
+      }
+    }
+    for (const li of ul.children) {
+      const e = S.entries.find((x) => x.id === li.dataset.id);
+      if (!e) continue;
+      const st = S.status(e, now);
+      const se = li.querySelector('.s-state');
+      if (se.textContent !== st.text) se.textContent = st.text;
+      se.className = 's-state s-' + st.cls;
+      const fact = [];
+      if (e.factArr && e.kind === 'stop') fact.push('прибыл ' + H(e.factArr) + ' · ' + S.devText(Math.trunc((e.factArr - e.arr) / 60)));
+      if (e.factTrack && e.factTrack !== e.track) fact.push('путь ' + T.trackName(e.factTrack) + ' — не по плану');
+      const fe = li.querySelector('.s-fact');
+      const ft = fact.join(' · ');
+      if (fe.textContent !== ft) fe.textContent = ft;
+      fe.hidden = !ft;
+    }
+  }
+
+  function openPlan(e) {
+    const c = RS.Schedule.consistOf(e);
+    if (c) return select(c.id);
+    if (e.state === 'plan') return UI.toast('Поезд №' + e.num + ' ещё не вышел на участок приближения: по графику он появится на подходе около ' + RS.Schedule.hm(e.spawnAt), 'info');
+    UI.toast('Поезд №' + e.num + ' уже за пределами станции', 'info');
   }
 
   // --- маршруты, журнал, поток ----------------------------------------------------------------
@@ -471,20 +552,34 @@
       ul.innerHTML = '';
       for (const i of s.incidents.slice(-6).reverse()) ul.append(h('li', {}, RS.fmtTime(i.t) + ' — ' + i.text));
     }
-    const nx = RS.Traffic.next;
-    $('#nextOdd').textContent = RS.Traffic.settings.auto ? Math.max(0, Math.ceil(nx.odd / 60)) + ' мин' : '—';
-    $('#nextEven').textContent = RS.Traffic.settings.auto ? Math.max(0, Math.ceil(nx.even / 60)) + ' мин' : '—';
+    const mode = RS.Traffic.settings.mode;
+    for (const k of ['odd', 'even']) {
+      let txt = '—';
+      if (mode === 'random') txt = 'через ' + Math.max(0, Math.ceil(RS.Traffic.next[k] / 60)) + ' мин';
+      if (mode === 'schedule') {
+        const e = RS.Schedule.entries.find((x) => x.dir === k && x.state === 'plan');
+        if (e) txt = '№' + e.num + ', ' + (e.kind === 'pass' ? 'проследование ' : 'прибытие ') + RS.Schedule.hm(e.arr);
+      }
+      const el = $(k === 'odd' ? '#nextOdd' : '#nextEven');
+      if (el.textContent !== txt) el.textContent = txt;
+    }
   }
 
   function bindFlow() {
     const s = RS.Traffic.settings;
-    const auto = $('#autoGen');
-    auto.checked = s.auto;
-    auto.onchange = () => { s.auto = auto.checked; };
+    const gap = $('#genGap');
+    document.querySelectorAll('input[name="genMode"]').forEach((r) => {
+      r.checked = r.value === s.mode;
+      r.onchange = () => {
+        if (!r.checked) return;
+        RS.Traffic.setMode(r.value);
+        gap.disabled = r.value !== 'random';
+      };
+    });
+    gap.disabled = s.mode !== 'random';
     const ar = $('#autoRoute');
     ar.checked = s.autoRoute;
-    ar.onchange = () => { s.autoRoute = ar.checked; RS.Log.add('Автодействие по главным путям ' + (ar.checked ? 'включено' : 'выключено'), 'info'); };
-    const gap = $('#genGap');
+    ar.onchange = () => { s.autoRoute = ar.checked; RS.Log.add('Автодействие ' + (ar.checked ? 'включено' : 'выключено'), 'info'); };
     const out = $('#genGapOut');
     const upd = () => { const v = Number(gap.value); s.minGap = Math.max(1, v - 2); s.maxGap = v + 3; out.textContent = 'каждые ' + s.minGap + '–' + s.maxGap + ' мин'; };
     gap.oninput = upd;
@@ -550,7 +645,7 @@
     bindFlow();
     buildHelp();
     setMode('train');
-    showTab('trains');
+    showTab('sched');
     setSpeed(1);
     renderTrainCard(true);
   };
@@ -562,6 +657,7 @@
     renderTrainCard();
     if (acc < 0.25) return;
     acc = 0;
+    if (UI.tab === 'sched') renderSchedule();
     if (UI.tab === 'trains') renderTrainList();
     if (UI.tab === 'routes') renderRoutes();
     if (UI.tab === 'log') renderLog();
