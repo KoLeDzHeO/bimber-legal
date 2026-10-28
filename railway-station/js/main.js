@@ -20,6 +20,7 @@
     RS.Render.init(document.getElementById('map'));
     RS.Schedule.init(RS.Sim.t);
     RS.Traffic.initial();
+    RS.Tasks.init();
     RS.UI.init();
     RS.Consist.computeOcc();
     RS.IL.update(0);

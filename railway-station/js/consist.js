@@ -208,6 +208,11 @@
       });
     }
     C.segOcc = occ;
+    // отказ «ложная занятость»: рельсовая цепь показывает занятость без подвижного состава
+    for (const s of Object.values(T.sections)) {
+      s.trueOcc = s.occupied;
+      if (s.fault) s.occupied = true;
+    }
   };
 
   C.sectionsOf = function (c) {

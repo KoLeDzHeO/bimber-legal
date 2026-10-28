@@ -80,6 +80,14 @@
     text(g, 710, y7 + 40, 'Пассажирское здание · пост ЭЦ', 'bld-label');
     el('rect', { x: 630, y: y8 - 36, width: 280, height: 22, rx: 2, class: 'building' }, g);
     text(g, 770, y8 - 21, 'Грузовой двор · крытый склад', 'bld-label');
+    // подъездные пути: лесопильный завод (путь 12) и нефтебаза (путь 11)
+    const y12 = Y(76), y11 = Y(280);
+    el('rect', { x: -66, y: y12 - 46, width: 112, height: 22, rx: 2, class: 'building' }, g);
+    text(g, -10, y12 - 31, 'Лесопильный завод', 'bld-label');
+    for (let i = 0; i < 4; i++) el('rect', { x: -60 + i * 19, y: y12 - 16, width: 14, height: 6, rx: 1, class: 'stack' }, g);
+    el('rect', { x: 1374, y: y11 + 8, width: 110, height: 5, class: 'ramp' }, g);
+    for (let i = 0; i < 4; i++) el('circle', { cx: 1390 + i * 26, cy: y11 + 33, r: 10, class: 'tank-res' }, g);
+    text(g, 1429, y11 + 58, 'Нефтебаза · сливная эстакада', 'bld-label');
     const xl = T.nodes.LIs.x, xr = T.nodes.RIs.x;
     const km = (dir) => (RS.Schedule.approachLen(dir) / 1000).toFixed(1).replace('.', ',');
     text(g, xl, yI + 50, '← ст. ' + LAY.neighbours.left, 'dir-label', 'start');
@@ -115,9 +123,10 @@
       el('path', { d: `M${n.x - dx * 0} ${n.y - 6}L${n.x} ${n.y + 6}M${n.x} ${n.y - 6}L${n.x + dx * 4} ${n.y - 6}M${n.x} ${n.y + 6}L${n.x + dx * 4} ${n.y + 6}`, class: 'buffer' }, R.gJoint);
     }
     // номера путей
+    const TAG_X = { '8П': [600, 896], '10П': [10], '9П': [1420], '11П': [1446], '12П': [34] };
     for (const [sec, tr] of Object.entries(LAY.tracks)) {
       const seg = T.segs[T.sections[sec].segs[0]];
-      const xs = sec === '8П' ? [600, 896] : sec === '10П' ? [10] : sec === '9П' ? [1420] : [524, 896];
+      const xs = TAG_X[sec] || [524, 896];
       for (const x of xs) {
         const y = T.yAt(seg, x) - 7;
         el('rect', { x: x - 13, y: y - 12, width: 26, height: 14, rx: 2, class: 'trk-tag' }, R.gLbl);
@@ -190,7 +199,7 @@
   function sectionState(sec) {
     if (RS.Net && RS.Net.isClient()) return (RS.Net.secStates && RS.Net.secStates[sec]) || 'free';
     const s = T.sections[sec];
-    if (s.occupied) return 'occ';
+    if (s.occupied) return s.fault && !s.trueOcc ? 'occ fault' : 'occ';
     if (s.lock) {
       const r = IL.byId(s.lock);
       if (!r) return 'free';
@@ -213,13 +222,15 @@
     for (const sw of Object.values(T.switches)) {
       const g = T.groups[sw.group];
       const e = R.swEls[sw.node];
-      const st = (g.damaged ? 'dmg' : g.target ? 'mov' : g.pos) + (g.locks.size ? ' lck' : '');
+      const st = (g.damaged ? 'dmg' : g.noCtl ? 'noctl' : g.target ? 'mov' : g.pos) + (g.locks.size ? ' lck' : '');
       if (e.state === st) continue;
       e.state = st;
       const mv = g.target ? ' moving' : '';
-      e.gp.setAttribute('class', 'swstub' + (g.pos === 'minus' || g.target ? ' gap' : '') + mv);
-      e.gm.setAttribute('class', 'swstub' + (g.pos === 'plus' || g.target ? ' gap' : '') + mv);
-      e.t.setAttribute('class', 'swnum' + (g.damaged ? ' dmg' : g.target ? ' mov' : g.locks.size ? ' lck' : '') + (g.pos === 'minus' ? ' minus' : ''));
+      // без контроля положения — разрыв с обеих сторон
+      const lost = g.target || g.noCtl;
+      e.gp.setAttribute('class', 'swstub' + (g.pos === 'minus' || lost ? ' gap' : '') + mv);
+      e.gm.setAttribute('class', 'swstub' + (g.pos === 'plus' || lost ? ' gap' : '') + mv);
+      e.t.setAttribute('class', 'swnum' + (g.damaged ? ' dmg' : g.noCtl ? ' noctl' : g.target ? ' mov' : g.locks.size ? ' lck' : '') + (g.pos === 'minus' ? ' minus' : ''));
     }
   }
 
@@ -237,6 +248,11 @@
   }
 
   const VEH_CLASS = (v) => 'veh v-' + v.kind + (v.dest === LAY.station ? ' dest' : '');
+  // Обводка вагона: жёлтая — назначением на станцию или ждёт подачи, синяя — под грузовой
+  // операцией, зелёная — готов к отправке.
+  const OUT_CLASS = (v) => 'veh-out' + (v.st === 'op' ? ' op' : v.st === 'ready' ? ' ready'
+    : v.dest === LAY.station || v.st === 'wait' || v.st === 'task' ? ' dest' : '');
+  R.flash = {};
 
   function updateTrains() {
     const seen = new Set();
@@ -249,15 +265,16 @@
         te = R.trainEls[c.id] = { g, outl: [], body: [], label: null, sig: '' };
         te.label = text(g, 0, 0, '', 'train-label');
       }
-      const sig = c.vehicles.map((v) => v.id).join(',');
+      const sig = c.vehicles.map((v) => v.id + (v.st || '')).join(',');
       if (te.sig !== sig) {
         for (const e of te.outl.concat(te.body)) e.remove();
-        te.outl = c.vehicles.map((v) => el('path', { class: 'veh-out' + (v.dest === LAY.station ? ' dest' : '') }, te.g));
+        te.outl = c.vehicles.map((v) => el('path', { class: OUT_CLASS(v) }, te.g));
         te.body = c.vehicles.map((v) => el('path', { class: VEH_CLASS(v) }, te.g));
         te.sig = sig;
         c.dirty = true;
       }
-      te.g.setAttribute('class', 'consist' + (sel === c.id ? ' selected' : '') + (c.ctl === 'ai' ? ' ai' : ''));
+      const flash = R.flash[c.id] > performance.now();
+      te.g.setAttribute('class', 'consist' + (sel === c.id ? ' selected' : '') + (c.ctl === 'ai' ? ' ai' : '') + (flash ? ' flash' : ''));
       if (!c.dirty) continue;
       c.dirty = false;
       let d = 0;
@@ -396,6 +413,19 @@
     R.view.x = x - R.view.w / 2;
     R.view.y = y - R.view.h / 2;
     R.applyView();
+  };
+
+  // Показать составы: приблизить, поставить в центр и несколько секунд подсвечивать.
+  R.showConsists = function (ids) {
+    const list = ids.map((id) => C.list.find((c) => c.id === id)).filter(Boolean);
+    if (!list.length) return false;
+    const v = R.view;
+    if (v.w > 820) { const k = 760 / v.w; v.w *= k; v.h *= k; }
+    const p = C.frontPoint(list[0]), q = C.rearPoint(list[0]);
+    R.centerOn((p[0] + q[0]) / 2, (p[1] + q[1]) / 2);
+    const until = performance.now() + 3500;
+    for (const c of list) R.flash[c.id] = until;
+    return true;
   };
 
   R.LAMPS = LAMPS;

@@ -24,6 +24,7 @@
     canSend: true,
     secStates: null,
     routes: [],
+    tasks: null, // сводка грузовой работы от ведущего
     next: { odd: '—', even: '—' },
   };
   const SOLO_KEY = 'rs-solo';
@@ -37,7 +38,7 @@
   const ASP = { R: 'r', G: 'g', Y: 'y', YF: 'f', YY: 'd', YFY: 'e', RW: 'i', W: 'w', B: 'b' };
   const ASP_BACK = Object.fromEntries(Object.entries(ASP).map(([k, v]) => [v, k]));
   const SEC = { free: '.', occ: 'o', 'lk-train': 't', 'lk-train setting': 'T', 'lk-train cancel': 'k',
-    'lk-shunt': 's', 'lk-shunt setting': 'S', 'lk-shunt cancel': 'q' };
+    'lk-shunt': 's', 'lk-shunt setting': 'S', 'lk-shunt cancel': 'q', 'occ fault': 'x' };
   const SEC_BACK = Object.fromEntries(Object.entries(SEC).map(([k, v]) => [v, k]));
   const PALETTE = ['#4fb3ff', '#ff8a5c', '#7ee081', '#d58bff', '#ffd84d', '#5ce0d0'];
   const enc = new TextEncoder();
@@ -63,12 +64,16 @@
   const chainEnc = (c) => c.chain.map((e) => SEGI[e.seg] * e.dir);
   const chainDec = (a) => a.map((n) => ({ seg: SEGS[Math.abs(n) - 1], dir: Math.sign(n) }));
 
+  // Состояние вагона в грузовой работе: = ждёт подачи, ~ есть задание, ^ под операцией, + готов.
+  const ST_MARK = { wait: '=', task: '~', op: '^', ready: '+' };
+  const ST_BACK = Object.fromEntries(Object.entries(ST_MARK).map(([k, v]) => [v, k]));
+
   function vehEnc(list) {
     const out = [];
     let prev = null, n = 0;
     const flush = () => { if (prev) out.push(prev + (n > 1 ? '*' + n : '')); };
     for (const v of list) {
-      const tok = v.type + (v.dest === LAY.station ? '!' : '');
+      const tok = v.type + (v.dest === LAY.station ? '!' : '') + (ST_MARK[v.st] || '');
       if (tok === prev) n++;
       else { flush(); prev = tok; n = 1; }
     }
@@ -79,12 +84,12 @@
   function vehDec(str, cid) {
     const out = [];
     for (const tok of String(str || '').split(',')) {
-      const m = /^(.+?)(!?)(?:\*(\d+))?$/.exec(tok);
+      const m = /^(.+?)(!?)([=~^+]?)(?:\*(\d+))?$/.exec(tok);
       if (!m || !C.VEH[m[1]]) continue;
       const d = C.VEH[m[1]];
-      for (let i = 0, n = Math.min(200, Number(m[3] || 1)); i < n; i++) {
+      for (let i = 0, n = Math.min(200, Number(m[4] || 1)); i < n; i++) {
         out.push({ id: cid + ':' + out.length + ':' + m[1], type: m[1], kind: d.kind, len: d.len, loco: !!d.loco, num: '',
-          dest: m[2] ? LAY.station : undefined, unit: d.kind === 'emu' ? cid + 'u' : undefined });
+          dest: m[2] ? LAY.station : undefined, unit: d.kind === 'emu' ? cid + 'u' : undefined, st: ST_BACK[m[3]] });
       }
     }
     return out;
@@ -120,7 +125,7 @@
     const R = RS.Render;
     const sw = GRPS.map((id) => {
       const g = T.groups[id];
-      return (g.pos === 'plus' ? 'p' : 'm') + (g.target ? (g.target === 'plus' ? 'p' : 'm') : '-') + ((g.locks.size ? 1 : 0) + (g.damaged ? 2 : 0));
+      return (g.pos === 'plus' ? 'p' : 'm') + (g.target ? (g.target === 'plus' ? 'p' : 'm') : '-') + ((g.locks.size ? 1 : 0) + (g.damaged ? 2 : 0) + (g.noCtl ? 4 : 0));
     }).join('');
     const msg = {
       t: Math.round(RS.Sim.t * 10) / 10,
@@ -180,10 +185,22 @@
       mode: st.mode, autoRoute: st.autoRoute, minGap: st.minGap, next };
   }
 
-  // Полная картина для подключившегося: составы, маршруты, расписание, журнал.
+  // Сводка грузовой работы: последние завершённые задания — без пояснений, чтобы уложиться в сообщение.
+  function tasksMsg() {
+    const v = RS.Tasks.view();
+    const ended = v.list.filter((t) => t.state !== 'active').sort((a, b) => b.ended - a.ended).slice(0, 5);
+    for (const t of ended) t.text = '';
+    v.list = v.list.filter((t) => t.state === 'active').concat(ended);
+    if (bytes(v) > 3900) for (const t of v.list) t.text = '';
+    return v;
+  }
+
+  // Полная картина для подключившегося: составы, маршруты, расписание, задания, журнал.
   function sendFullSync() {
     for (const c of C.list) sendConsist(c);
     emit('rt', routesMsg());
+    lastTk = JSON.stringify(tasksMsg());
+    emit('tk', JSON.parse(lastTk));
     sendSchedule(true);
     sendScheduleState(true);
     emit('stat', statMsg());
@@ -196,10 +213,10 @@
     if (Net.mode === 'host') emit('lg', { items: [item] });
   };
 
-  let tSt = 0, tRt = 0, tSch = 0, tStat = 0, tFull = 0, lastRt = '';
+  let tSt = 0, tRt = 0, tSch = 0, tStat = 0, tFull = 0, tTk = 0, lastRt = '', lastTk = '';
   function hostTick(dt) {
     if (!Net.others().length) return;
-    tSt += dt; tRt += dt; tSch += dt; tStat += dt; tFull += dt;
+    tSt += dt; tRt += dt; tSch += dt; tStat += dt; tFull += dt; tTk += dt;
     for (const c of C.list) {
       const sig = vehEnc(c.vehicles) + '|' + JSON.stringify(infoOut(c));
       if (csSig[c.id] !== sig) sendConsist(c);
@@ -213,11 +230,17 @@
     }
     if (tSch >= 1) { tSch = 0; sendSchedule(false); sendScheduleState(tFull >= 15); if (tFull >= 15) tFull = 0; }
     if (tStat >= 2) { tStat = 0; emit('stat', statMsg()); }
+    if (tTk >= 1) {
+      tTk = 0;
+      const m = tasksMsg();
+      const key = JSON.stringify(m);
+      if (key !== lastTk) { lastTk = key; emit('tk', m); }
+    }
   }
 
   // --- ведущий: команды игроков ---------------------------------------------------------------
   function reply(to, cid, res) {
-    emit('res', { to, cid, ok: !!res.ok, why: res.why || '', inviteOk: !!res.inviteOk });
+    emit('res', { to, cid, ok: !!res.ok, why: res.why || '', inviteOk: !!res.inviteOk, title: res.title || '' });
   }
 
   function doCommand(msg) {
@@ -257,6 +280,8 @@
       case 'speed': RS.UI.setSpeed(Math.max(0, Math.min(12, Number(d.k) || 0))); return { ok: true };
       case 'mode': if (['schedule', 'random', 'off'].includes(d.mode)) RS.Traffic.setMode(d.mode); RS.UI.syncFlow(); return { ok: true };
       case 'autoRoute': RS.Traffic.settings.autoRoute = !!d.on; RS.UI.syncFlow(); return { ok: true };
+      case 'tasks': RS.Tasks.setOn(!!d.on); RS.UI.syncTasks(); return { ok: true };
+      case 'faults': RS.Tasks.setFaults(!!d.on); RS.UI.syncTasks(); return { ok: true };
       case 'gap': { const v = Math.max(3, Math.min(15, Number(d.v) || 5)); RS.Traffic.settings.minGap = Math.max(1, v - 2); RS.Traffic.settings.maxGap = v + 3; RS.UI.syncFlow(); return { ok: true }; }
       case 'spawn': {
         const c = RS.Traffic.spawn(d.dir === 'even' ? 'even' : 'odd', RS.Traffic.TYPES[d.cat] ? d.cat : null);
@@ -295,6 +320,7 @@
       g.target = p[1] === '-' ? null : p[1] === 'm' ? 'minus' : 'plus';
       const f = Number(p[2]) || 0;
       g.damaged = !!(f & 2);
+      g.noCtl = !!(f & 4);
       g.locks = f & 1 ? new Map([[0, g.pos]]) : new Map();
     });
     const seen = new Set();
@@ -556,6 +582,7 @@
     room.on('stat', fromHost(onStat));
     room.on('lg', fromHost(onLog));
     room.on('rt', fromHost((d) => { Net.routes = Array.isArray(d) ? d : []; }));
+    room.on('tk', fromHost((d) => { if (d && Array.isArray(d.list)) { Net.tasks = d; RS.UI.syncTasks(); } }));
     room.on('res', fromHost(onResult));
     room.on('hello', (m) => { if (Net.mode === 'host' && !m.isMe) sendFullSync(); });
     room.on('need', (m) => {

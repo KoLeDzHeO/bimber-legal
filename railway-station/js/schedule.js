@@ -22,10 +22,10 @@
     };
   }
 
-  const VMAX = { pass: 120, subur: 120, freight: 80, local: 70, light: 100 };
+  const VMAX = { pass: 120, subur: 120, freight: 80, local: 70, light: 100, pickup: 80 };
   // За сколько секунд до времени по графику поезд появляется в начале перегона: время хода
   // по шести блок-участкам и по станции до остановки (около 1,1 км) или до выходного (1,3 км).
-  const TYP_LEN = { pass: 400, subur: 220, freight: 650, local: 320, light: 35 };
+  const TYP_LEN = { pass: 400, subur: 220, freight: 650, local: 320, light: 35, pickup: 85 };
   S.approachLen = (dir) => LAY.spawns[dir].segs.reduce((s, id) => s + RS.Track.segs[id].len, 0);
   // Средняя скорость хода (доля от максимальной) и поправка подобраны по прогону модели.
   S.lead = function (cat, kind, dir) {
@@ -36,10 +36,11 @@
   };
 
   // Диапазоны номеров: скорые 1–148, пассажирские 301–398, пригородные 6001–6998,
-  // грузовые 2001–2998, сборные 3401–3498, локомотивы резервом 4001–4998.
+  // грузовые 2001–2998, сборные 3401–3498, локомотивы резервом 4001–4998, вывозные 9701–9798.
   const NUM = {
     express: [1, 148, 31], pass: [301, 398, 341], subur: [6001, 6998, 6101],
     freight: [2001, 2998, 2101], local: [3401, 3498, 3411], light: [4001, 4998, 4101],
+    pickup: [9701, 9798, 9711],
   };
   function nextNum(kind, odd) {
     const [lo, hi, start] = NUM[kind];
@@ -66,7 +67,8 @@
   }
 
   // Час графика: чётные часы — с технической стоянкой грузового, нечётные — с обгоном
-  // грузового скорым поездом и (через раз) сборным поездом с отцепкой вагонов.
+  // грузового скорым поездом и (через раз) сборным поездом с отцепкой вагонов
+  // или вывозным, который привозит вагоны и забирает готовые к отправке.
   function planHour(h) {
     const rnd = prng(h * 7919 + 101);
     const even = h % 2 === 0;
@@ -89,7 +91,9 @@
         ov.after = ex.id;
         add({ dir, cat: 'freight', kind: 'pass', arr: at(3), track: main, title: 'Грузовой', reason: 'проследование', num: nextNum('freight', odd) });
         if (h % 4 === 1) {
-          add({ dir, cat: 'local', kind: 'stop', arr: at(4), dep: at(4) + 40 * 60, minStop: 10 * 60, track: odd ? '5П' : '6П', title: 'Сборный', reason: 'отцепка вагонов на грузовой двор', num: nextNum('local', odd) });
+          add({ dir, cat: 'local', kind: 'stop', arr: at(4), dep: at(4) + 40 * 60, minStop: 10 * 60, track: odd ? '5П' : '6П', title: 'Сборный', reason: 'отцепка и прицепка вагонов', num: nextNum('local', odd) });
+        } else {
+          add({ dir, cat: 'pickup', kind: 'stop', arr: at(4), dep: at(4) + 40 * 60, minStop: 10 * 60, track: odd ? '3П' : '6П', title: 'Вывозной', reason: 'подвоз вагонов и подборка готовых', num: nextNum('pickup', odd) });
         }
       }
     }

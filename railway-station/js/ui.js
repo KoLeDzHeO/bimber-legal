@@ -98,7 +98,7 @@
     }
     if (res.inviteOk) {
       resetSel();
-      UI.ask('Путь ' + T.trackName(c.dest) + ' занят', res.why + ' Замкнуть маршрут ' + IL.title(c) + ' и включить пригласительный сигнал? Машинист проследует светофор со скоростью не более 20 км/ч и остановится перед подвижным составом.',
+      UI.ask(res.title || 'Путь ' + T.trackName(c.dest) + ' занят', res.why + ' Замкнуть маршрут ' + IL.title(c) + ' и включить пригласительный сигнал? Машинист проследует светофор со скоростью не более 20 км/ч и остановится перед подвижным составом.',
         'Включить ПС', () => trySet(c, true));
       return;
     }
@@ -268,7 +268,7 @@
 
   const CAT_CHIP = {
     pass: ['Пасс', 'c-pass'], subur: ['Приг', 'c-subur'], freight: ['Груз', 'c-freight'], local: ['Сборн', 'c-local'],
-    light: ['Лок', 'c-light'], shunt: ['Манёвр', 'c-shunt'], cut: ['Отцеп', 'c-cut'],
+    light: ['Лок', 'c-light'], shunt: ['Манёвр', 'c-shunt'], cut: ['Отцеп', 'c-cut'], pickup: ['Вывоз', 'c-local'],
   };
 
   function where(c) {
@@ -316,7 +316,7 @@
       if (!box.firstChild) box.append(h('p', { class: 'muted small' }, 'Нажмите на состав на табло или в списке, чтобы управлять им: локомотив можно вести вручную, расцеплять и сцеплять вагоны.'));
       return;
     }
-    const sig = c.id + '|' + c.ctl + '|' + c.vehicles.length + '|' + (c.info && c.info.cat);
+    const sig = c.id + '|' + c.ctl + '|' + c.vehicles.length + '|' + (c.info && c.info.cat) + '|' + c.vehicles.map((v) => v.st || '').join('');
     if (force || box.dataset.sig !== sig) {
       box.dataset.sig = sig;
       box.dataset.id = c.id;
@@ -407,12 +407,18 @@
         }));
       }
       const v = c.vehicles[i];
-      const title = (v.loco ? v.type : (C.VEH[v.type].title || v.type)) + (v.num ? ' №' + v.num : '') + (v.dest === LAY.station ? ' — назначением на ст. ' + LAY.station : '');
-      strip.append(h('span', { class: 'vb v-' + v.kind + (v.dest === LAY.station ? ' dest' : ''), role: 'listitem', title, style: 'flex-grow:' + v.len }));
+      const title = (v.loco ? v.type : (C.VEH[v.type].title || v.type)) + (v.num ? ' №' + v.num : '') +
+        (ST_TITLE[v.st] || (v.dest === LAY.station ? ' — назначением на ст. ' + LAY.station : ''));
+      strip.append(h('span', { class: vbClass(v), role: 'listitem', title, style: 'flex-grow:' + v.len }));
     });
     box.append(h('div', { class: 'strip-wrap' }, h('div', { class: 'strip-cap muted small' }, sd > 0 ? '← хвост · голова →' : '← голова · хвост →'), strip));
     box.append(h('p', { class: 'muted small' }, 'Нажмите на промежуток между вагонами, чтобы расцепить (только на стоянке).'));
   }
+
+  // Вагоны станции в грузовой работе: обводка как на табло.
+  const ST_TITLE = { wait: ' — ждёт подачи на грузовой фронт', task: ' — по нему есть маневровое задание', op: ' — под грузовой операцией', ready: ' — готов к отправке' };
+  const vbClass = (v) => 'vb v-' + v.kind + (v.st === 'op' ? ' op' : v.st === 'ready' ? ' ready'
+    : v.dest === LAY.station || v.st === 'wait' || v.st === 'task' ? ' dest' : '');
 
   function doSplit(c, k) {
     if (!allowed('trains')) return;
@@ -558,6 +564,129 @@
     UI.toast('Поезд №' + e.num + ' уже за пределами станции', 'info');
   }
 
+  // --- грузовая работа: задания, фронты, отказы -----------------------------------------------
+  const TASK_KIND = { deliver: 'Подача', remove: 'Уборка', attach: 'Прицепка' };
+  // У ведущего и в одиночной игре — из модели, у подключившегося игрока — от ведущего.
+  const taskView = () => (remote() ? RS.Net.tasks : RS.Tasks.view());
+  UI.taskView = taskView;
+
+  const setText = (el, txt) => { if (el && el.textContent !== txt) el.textContent = txt; };
+  const signed = (n) => (n > 0 ? '+' : n < 0 ? '−' : '') + Math.abs(n);
+
+  function taskDue(t, now) {
+    const H = RS.Schedule.hm;
+    if (t.kind === 'attach') return t.ready ? 'вагоны в составе — отправляйте поезд' : 'до отправления поезда №' + t.train + ' в ' + H(t.due);
+    const left = Math.ceil((t.due - now) / 60);
+    return 'срок ' + H(t.due) + (left > 0 ? ' · осталось ' + left + ' мин' : ' · срок истёк');
+  }
+
+  function taskProgress(t) {
+    if (t.kind === 'attach') return 'прицеплено ' + t.n + ' из ' + t.total + ' ваг.';
+    return 'на месте ' + t.n + ' из ' + t.total + ' ваг.';
+  }
+
+  function renderTasks() {
+    const v = taskView();
+    const ul = $('#taskList');
+    if (!v) {
+      setText($('#taskSum'), 'Ожидание данных от ведущего…');
+      return;
+    }
+    const now = RS.Sim.t;
+    const sc = v.score;
+    setText($('#taskSum'), 'Баллы смены: ' + sc.total + ' — задания ' + signed(sc.tasks) + ', поезда по графику ' + signed(sc.onTime) +
+      ', опоздания ' + signed(sc.late) + ', нарушения ' + signed(sc.inc) + '. Выполнено заданий: ' + v.done + ', сорвано: ' + v.failed + '.');
+    const active = v.list.filter((t) => t.state === 'active');
+    const ended = v.list.filter((t) => t.state !== 'active').sort((a, b) => b.ended - a.ended).slice(0, 5);
+    const key = active.map((t) => t.id + ':' + t.n + ':' + t.ready).join(',') + '|' + ended.map((t) => t.id + t.state).join(',') + '|' + v.on;
+    if (ul.dataset.key !== key) {
+      ul.dataset.key = key;
+      ul.innerHTML = '';
+      if (!active.length) {
+        ul.append(h('li', { class: 'muted small empty' }, v.on
+          ? 'Активных заданий нет. Новые появятся, когда на станции будут вагоны для подачи, после грузовых операций и с прибытием сборного или вывозного поезда.'
+          : 'Маневровые задания выключены — включите их в настройках ниже.'));
+      }
+      for (const t of active) {
+        ul.append(h('li', { class: 'kitem k-' + t.kind + (t.ready ? ' ready' : ''), 'data-id': t.id },
+          h('div', { class: 'k-head' }, h('span', { class: 'chip k-chip' }, TASK_KIND[t.kind]), h('b', { class: 'k-title' }, t.title),
+            h('span', { class: 'k-pts' }, '+' + t.reward)),
+          h('p', { class: 'k-text small' }, t.text),
+          t.kind === 'deliver' && RS.Tasks.HINT[t.target]
+            ? h('details', { class: 'k-hint small' }, h('summary', {}, 'Как подать'), h('p', {}, RS.Tasks.HINT[t.target]))
+            : null,
+          h('div', { class: 'k-foot small' }, h('span', { class: 'k-prog' }, taskProgress(t)), h('span', { class: 'k-due' }, ''),
+            h('button', { class: 'btn ghost sm', onclick: () => showTask(t) }, 'Показать'))));
+      }
+      for (const t of ended) {
+        const ok = t.state === 'done';
+        ul.append(h('li', { class: 'kitem ended ' + (ok ? 'k-ok' : 'k-fail') },
+          h('span', { class: 'k-mark', 'aria-hidden': 'true' }, ok ? '✓' : '✕'), h('span', { class: 'k-title' }, t.title),
+          h('span', { class: 'k-pts' }, ok ? '+' + t.reward : '−10')));
+      }
+    }
+    for (const li of ul.querySelectorAll('[data-id]')) {
+      const t = active.find((x) => x.id === li.dataset.id);
+      if (!t) continue;
+      const due = li.querySelector('.k-due');
+      setText(due, taskDue(t, now));
+      due.classList.toggle('late', t.kind !== 'attach' && t.due - now < 5 * 60);
+    }
+    // фронты и отказы
+    const H = RS.Schedule.hm;
+    const fl = $('#frontList');
+    const fronts = v.fronts.map((f) => {
+      const name = 'Путь ' + T.trackName(f.track) + ' · ' + f.name;
+      const st = f.st === 'op' ? f.what + ' ' + f.n + ' ваг. до ' + H(f.until)
+        : f.st === 'ready' ? f.n + ' ваг., есть готовые к уборке' : f.st === 'busy' ? 'занят: ' + f.n + ' ваг.' : 'свободен';
+      return [name, st, f.st];
+    });
+    const faults = v.faults.map((f) => [f.kind === 'occ' ? 'Ложная занятость ' + f.id : 'Стрелка ' + f.id + ' без контроля положения',
+      'восстановление около ' + H(f.until), 'fault']);
+    if (!faults.length) faults.push([v.faultsOn ? 'Отказов нет' : 'Отказы выключены', v.faultsOn ? 'устройства исправны' : 'включаются в настройках ниже', 'free']);
+    for (const [box, rows] of [[fl, fronts], [$('#faultList'), faults]]) {
+      const k = JSON.stringify(rows);
+      if (box.dataset.key === k) continue;
+      box.dataset.key = k;
+      box.innerHTML = '';
+      for (const [a, b, cls] of rows) box.append(h('li', { class: 'f-' + cls }, h('b', {}, a), h('span', {}, b)));
+    }
+    UI.syncTasks();
+  }
+
+  function showTask(t) {
+    if (!t.cs.length || !R.showConsists(t.cs)) UI.toast('Вагоны задания сейчас не на станции', 'info');
+  }
+
+  // Счёт смены вверху и число активных заданий на вкладке.
+  function renderScore() {
+    const v = taskView();
+    setText($('#score'), v ? String(v.score.total) : '—');
+    setText($('#cntTasks'), v ? String(v.list.filter((t) => t.state === 'active').length) : '0');
+  }
+
+  UI.syncTasks = function () {
+    const v = taskView();
+    if (!v) return;
+    $('#tasksOn').checked = !!v.on;
+    $('#faultsOn').checked = !!v.faultsOn;
+  };
+
+  function bindTasks() {
+    const on = $('#tasksOn'), f = $('#faultsOn');
+    on.onchange = () => {
+      if (!allowed('flow')) return UI.syncTasks();
+      if (remote()) return RS.Net.cmd('tasks', { on: on.checked });
+      RS.Tasks.setOn(on.checked);
+    };
+    f.onchange = () => {
+      if (!allowed('flow')) return UI.syncTasks();
+      if (remote()) return RS.Net.cmd('faults', { on: f.checked });
+      RS.Tasks.setFaults(f.checked);
+    };
+    $('#scoreBtn').onclick = () => showTab('tasks');
+  }
+
   // --- маршруты, журнал, поток ----------------------------------------------------------------
   function routeState(r) {
     if (r.cancelT > 0) return ['Искусственное размыкание · ' + Math.ceil(r.cancelT) + ' с', 'st-cancel'];
@@ -631,6 +760,9 @@
     $('#stArrived').textContent = s.arrived;
     $('#stWait').textContent = Math.round(s.waitMin);
     $('#stInc').textContent = s.incN !== undefined ? s.incN : s.incidents.length;
+    const tv = taskView();
+    $('#stScore').textContent = tv ? tv.score.total : '—';
+    $('#stTasks').textContent = tv ? tv.done : '—';
     const ul = $('#incList');
     if (ul.childElementCount !== s.incidents.length) {
       ul.innerHTML = '';
@@ -819,6 +951,7 @@
     bindNet();
     bindBoard();
     bindFlow();
+    bindTasks();
     buildHelp();
     setMode('train');
     showTab('sched');
@@ -834,11 +967,13 @@
     if (acc < 0.25) return;
     acc = 0;
     if (UI.tab === 'sched') renderSchedule();
+    if (UI.tab === 'tasks') renderTasks();
     if (UI.tab === 'trains') renderTrainList();
     if (UI.tab === 'routes') renderRoutes();
     if (UI.tab === 'log') renderLog();
     if (UI.tab === 'flow') renderStats();
     renderApproach();
+    renderScore();
     $('#cntTrains').textContent = C.list.filter((c) => c.ctl === 'ai').length;
     $('#cntRoutes').textContent = remote() ? RS.Net.routes.length : IL.routes.length;
   };

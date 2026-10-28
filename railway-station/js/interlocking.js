@@ -24,6 +24,7 @@
   IL.canThrow = function (gid) {
     const g = T.groups[gid];
     if (g.damaged) return { ok: false, why: 'Стрелка ' + gid + ' взрезана — требуется восстановление' };
+    if (g.noCtl) return { ok: false, why: 'Стрелка ' + gid + ' без контроля положения — ждите электромеханика' };
     if (g.locks.size) return { ok: false, why: 'Стрелка ' + gid + ' замкнута в маршруте' };
     if (groupBusy(g)) return { ok: false, why: 'Стрелочная секция стрелки ' + gid + ' занята' };
     return { ok: true };
@@ -151,7 +152,7 @@
     opts = opts || {};
     if (IL.routeFrom(c.start)) return { ok: false, why: 'От светофора ' + c.start + ' уже задан маршрут' };
     const last = c.sections.length - 1;
-    let destBusy = false;
+    let destBusy = false, falseOcc = null, noCtl = null;
     for (let i = 0; i <= last; i++) {
       const sec = T.sections[c.sections[i]];
       if (sec.lock) {
@@ -159,6 +160,8 @@
         return { ok: false, why: 'Враждебный маршрут: ' + T.trackName(sec.id) + ' замкнута в маршруте ' + (r ? r.title : '') };
       }
       if (sec.occupied) {
+        // ложная занятость (отказ рельсовой цепи): светофор не откроется, но пригласительный — можно
+        if (sec.fault && !sec.trueOcc) { falseOcc = falseOcc || sec.id; continue; }
         const isDest = i === last && c.end.type !== 'line';
         if (isDest && c.kind === 'shunt') continue;
         if (isDest && c.kind === 'train') { destBusy = true; continue; }
@@ -168,11 +171,25 @@
     for (const [gid, pos] of Object.entries(c.req)) {
       const g = T.groups[gid];
       if (g.damaged) return { ok: false, why: 'Стрелка ' + gid + ' взрезана' };
+      if (g.noCtl) {
+        // без контроля стрелку не перевести; в нужном положении её закрепляют и пропускают по пригласительному
+        if (g.pos !== pos || g.target) return { ok: false, why: 'Стрелка ' + gid + ' без контроля положения и стоит не в том положении' };
+        noCtl = noCtl || gid;
+      }
       const inPlace = g.pos === pos && !g.target;
       for (const [rid, p] of g.locks) {
         if (p !== pos) return { ok: false, why: 'Стрелка ' + gid + ' замкнута в другом положении (маршрут ' + (IL.byId(rid) || {}).title + ')' };
       }
       if (!inPlace && groupBusy(g)) return { ok: false, why: 'Стрелку ' + gid + ' нельзя перевести: секция занята' };
+    }
+    if ((falseOcc || noCtl) && !opts.invite) {
+      const sig = T.signals[c.start];
+      const what = falseOcc ? 'Занята рельсовая цепь ' + falseOcc : 'Стрелка ' + noCtl + ' без контроля положения';
+      if (c.kind !== 'train' || (sig.kind !== 'entry' && sig.kind !== 'exit')) return { ok: false, why: what };
+      return { ok: false, inviteOk: true, title: what,
+        why: (falseOcc ? 'Рельсовая цепь ' + falseOcc + ' показывает занятость из-за отказа' : 'Стрелка ' + noCtl + ' без контроля положения') +
+          ', светофор не откроется. ' + (noCtl ? 'Стрелка стоит в нужном положении и закреплена. ' : '') +
+          'Убедившись, что маршрут свободен, поезд можно пропустить по пригласительному сигналу.' };
     }
     if (destBusy && !opts.invite) {
       return { ok: false, inviteOk: true, why: 'Путь ' + T.trackName(c.dest) + ' занят. Приём возможен только по пригласительному сигналу.' };
@@ -263,7 +280,8 @@
   function conditionsOk(r) {
     const last = r.sections.length - 1;
     for (let i = 0; i <= last; i++) {
-      if (!T.sections[r.sections[i]].occupied) continue;
+      const sec = T.sections[r.sections[i]];
+      if (!sec.occupied || (r.invite && sec.fault && !sec.trueOcc)) continue;
       const isDest = i === last && r.end.type !== 'line';
       if (isDest && (r.kind === 'shunt' || r.invite)) continue;
       return false;
@@ -274,14 +292,17 @@
   function switchesReady(r) {
     return Object.entries(r.req).every(([gid, pos]) => {
       const g = T.groups[gid];
-      return !g.damaged && !g.target && g.pos === pos;
+      return !g.damaged && (!g.noCtl || r.invite) && !g.target && g.pos === pos;
     });
   }
+
+  // Фактическая занятость: ложная занятость рельсовой цепи (отказ) не означает, что поезд вступил в маршрут.
+  const trulyOcc = (sec) => (sec.trueOcc === undefined ? sec.occupied : sec.trueOcc);
 
   function sectionalRelease(r) {
     const last = r.sections.length - 1;
     r.sections.forEach((s, i) => {
-      if (T.sections[s].occupied) r.seen[i] = true;
+      if (trulyOcc(T.sections[s])) r.seen[i] = true;
     });
     for (let i = 0; i <= last; i++) {
       if (r.released[i]) continue;
@@ -327,7 +348,7 @@
         if (r.cancelT <= 0) { release(r); log('Маршрут ' + r.title + ' разомкнут', 'info'); }
         continue;
       }
-      const firstOcc = T.sections[r.sections[0]].occupied;
+      const firstOcc = trulyOcc(T.sections[r.sections[0]]);
       if (firstOcc && !r.used) {
         r.used = true;
         T.signals[r.start].invite = 0;

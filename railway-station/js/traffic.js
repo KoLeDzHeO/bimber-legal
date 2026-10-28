@@ -38,6 +38,17 @@
   // --- типы поездов ---------------------------------------------------------------------
   const FREIGHT_MIX = ['К', 'К', 'ПВ', 'ПВ', 'ПВ', 'Ц', 'Ц', 'ПЛ', 'Х'];
 
+  // Грузовой фронт, под который идут вагоны назначением на станцию, и как к нему подать.
+  const pickFront = () => {
+    const k = pick(Object.keys(LAY.fronts));
+    return [k, LAY.fronts[k]];
+  };
+  const FRONT_WAY = {
+    '8П': 'Путь 8 примыкает к чётной горловине: подача с вытяжного пути 9 от светофора М2.',
+    '11П': 'Подъездной путь 11 отходит стрелкой 24 от вытяжного пути 9 (чётная горловина).',
+    '12П': 'Подъездной путь 12 отходит стрелкой 21 от вытяжного пути 10 (нечётная горловина).',
+  };
+
   function numFor(lo, hi, odd) {
     let n = rnd(lo, hi);
     if ((n % 2 === 1) !== odd) n += n < hi ? 1 : -1;
@@ -84,11 +95,26 @@
         const loco = pick(['ВЛ80С', '2ЭС5К']);
         const n = rnd(14, 24);
         const k = rnd(3, 7);
+        const [fk, f] = pickFront();
         const cars = Array.from({ length: n }, (_, i) =>
-          C.vehicle(pick(FREIGHT_MIX), i >= n - k ? { dest: LAY.station } : {}));
+          i >= n - k ? C.vehicle(pick(f.types), { dest: LAY.station }) : C.vehicle(pick(FREIGHT_MIX)));
         return {
           vehicles: [C.vehicle(loco)].concat(cars), num: numFor(3401, 3498, odd), setOff: k, v0: 55,
-          note: 'Отцепить ' + k + ' хвост. ваг. назначением на ст. ' + LAY.station + ' (жёлтая обводка) и подать на путь 8 — грузовой двор. Путь 8 примыкает к чётной горловине: подача с вытяжного пути 9 от светофора М2.',
+          note: 'Отцепить ' + k + ' хвост. ваг. назначением на ст. ' + LAY.station + ' (жёлтая обводка) и подать на путь ' +
+            LAY.tracks[fk].name + ' — ' + f.name + '. ' + FRONT_WAY[fk],
+        };
+      },
+    },
+    pickup: {
+      title: 'Вывозной', w: 1, vmax: 80,
+      make(odd) {
+        const k = rnd(2, 5);
+        const [fk, f] = pickFront();
+        const cars = Array.from({ length: k }, () => C.vehicle(pick(f.types), { dest: LAY.station }));
+        return {
+          vehicles: [C.vehicle(pick(['ВЛ80С', '2ЭС5К']))].concat(cars), num: numFor(9701, 9798, odd), setOff: k, v0: 60,
+          note: 'Отцепить ' + k + ' ваг. назначением на ст. ' + LAY.station + ' и подать на путь ' + LAY.tracks[fk].name + ' — ' + f.name +
+            '; готовые к отправке вагоны станции (зелёная обводка) прицепить к поезду.',
         };
       },
     },
@@ -232,8 +258,11 @@
     const ls = c.lastSig;
     if (!ls) return;
     if (ls.kind === 'entry') ai.inStation = true;
+    // проход выходного по маневровому показанию (маневры локомотивом поезда) — ещё не отправление
+    const departs = ai.inStation && (ls.kind === 'block' || (ls.kind === 'exit' && ls.aspect !== 'W'));
     const p = c.info.plan;
-    if (p && !p.factDep && ai.inStation && (ls.kind === 'exit' || ls.kind === 'block')) RS.Schedule.onDepart(c, p);
+    if (p && !p.factDep && departs) RS.Schedule.onDepart(c, p);
+    if (departs && RS.Tasks) RS.Tasks.onDepart(c);
   };
 
   AI.onExit = function (c) {
@@ -243,6 +272,7 @@
     }
     RS.Stats.passed++;
     if (c.info.plan && !c.info.plan.factDep) RS.Schedule.onDepart(c, c.info.plan);
+    if (RS.Tasks) RS.Tasks.onDepart(c);
     const toward = C.screenDir(c) * (c.move || 1) > 0 ? LAY.neighbours.right : LAY.neighbours.left;
     const left = c.vehicles.filter((v) => v.dest === LAY.station).length;
     if (!c.info.plan) {
@@ -264,7 +294,7 @@
   // --- генератор --------------------------------------------------------------------------
   const Traffic = {
     // mode: schedule — по расписанию, random — случайные поезда, off — только вызванные вручную
-    settings: { mode: 'schedule', autoRoute: false, minGap: 3, maxGap: 8, weights: { pass: 3, subur: 3, freight: 4, local: 2, light: 1 } },
+    settings: { mode: 'schedule', autoRoute: false, minGap: 3, maxGap: 8, weights: { pass: 3, subur: 3, freight: 4, local: 2, light: 1, pickup: 1 } },
     next: { odd: 25, even: 100 },
     TYPES,
   };
@@ -336,6 +366,8 @@
     if (d && IL.check(d).ok) IL.set(d);
   }
 
+  const MANUAL = ['local', 'pickup'];
+
   function autoRoute() {
     const IL = RS.IL;
     const now = RS.Sim.t;
@@ -347,23 +379,25 @@
         const d = Traffic.distToEntry(c);
         if (d !== null && d < bd) { bd = d; best = c; }
       }
-      // сборные поезда принимает ДСП: с ними нужна маневровая работа
-      if (!best || bd > 4000 || best.ctl !== 'ai' || best.info.cat === 'local') continue;
+      if (!best || bd > 4000 || best.ctl !== 'ai') continue;
+      // сборный и вывозной — только на боковой путь по графику: отправляет их ДСП после маневровой работы
+      const manual = MANUAL.includes(best.info.cat);
       if (!IL.routeFrom(sp.entry)) {
         const main = k === 'odd' ? 'IП' : 'IIП';
         const plan = best.info.plan;
         const cands = IL.findRoutes(sp.entry, 'train');
-        for (const t of [plan && plan.track, main]) {
+        const order = manual ? [plan ? plan.track : k === 'odd' ? '5П' : '6П'] : [plan && plan.track, main];
+        for (const t of order) {
           const cand = t && cands.find((x) => x.dest === t);
           if (cand && IL.check(cand).ok) { IL.set(cand); break; }
         }
       }
       // поезд без остановки: сразу и отправление, чтобы входной открылся на проход
       const r = IL.routeFrom(sp.entry);
-      if (r && LAY.tracks[r.dest] && !plannedStop(best)) setExit(k, r.dest);
+      if (r && LAY.tracks[r.dest] && !plannedStop(best) && !manual) setExit(k, r.dest);
     }
     for (const c of C.list) {
-      if (c.ctl !== 'ai' || !c.ai || !c.ai.inStation || !c.info.dir || c.info.cat === 'local') continue;
+      if (c.ctl !== 'ai' || !c.ai || !c.ai.inStation || !c.info.dir || MANUAL.includes(c.info.cat)) continue;
       const track = C.sectionsOf(c).find((s) => LAY.tracks[s]);
       if (!track) continue;
       const plan = c.info.plan;
@@ -379,6 +413,7 @@
       AI.track(c);
     }
     if (Traffic.settings.autoRoute) autoRoute();
+    if (RS.Tasks) RS.Tasks.update(dt);
     const mode = Traffic.settings.mode;
     if (mode === 'schedule') {
       RS.Schedule.update(dt);
@@ -422,9 +457,10 @@
     // вагоны под выгрузкой на грузовом дворе (путь 8)
     place('t8', 1, 8 + 6 * 14.7, Array.from({ length: 6 }, () => C.vehicle('К')),
       { num: '', cat: 'cut', title: 'Отцеп' });
-    // отцеп на пути 7
-    place('t7', 1, 520, Array.from({ length: 12 }, () => C.vehicle(pick(['ПВ', 'Ц', 'ПЛ']))),
-      { num: '', cat: 'cut', title: 'Отцеп' });
+    // отцеп на пути 7: слева платформы под погрузку на лесозаводе, в середине полувагоны
+    // на грузовой двор, справа цистерны на нефтебазу
+    const cut7 = ['ПЛ', 'ПЛ', 'ПЛ', 'ПЛ', 'ПВ', 'ПВ', 'ПВ', 'ПВ', 'Ц', 'Ц', 'Ц', 'Ц'];
+    place('t7', 1, 520, cut7.map((t) => C.vehicle(t)), { num: '', cat: 'cut', title: 'Отцеп' });
     // чётный грузовой на пути 6 ожидает отправления
     const cars = Array.from({ length: 38 }, () => C.vehicle(pick(['ПВ', 'ПВ', 'Х', 'Ц'])));
     const veh = cars.concat([C.vehicle('2ЭС5К')]); // голова — слева
