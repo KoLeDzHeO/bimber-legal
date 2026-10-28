@@ -11,6 +11,16 @@
   const LAY = RS.LAYOUT;
   const $ = (s) => document.querySelector(s);
 
+  // Совместная игра: у подключившегося игрока действия уходят ведущему командами,
+  // а роль (ДСП или машинист) ограничивает, какие органы управления ему доступны.
+  const remote = () => !!(RS.Net && RS.Net.isClient());
+  function allowed(what) {
+    if (!RS.Net || RS.Net.allowed(what)) return true;
+    UI.toast(RS.Net.denyText(what), 'info');
+    return false;
+  }
+  const routeFromAny = (sig) => (remote() ? RS.Net.routes.find((r) => r.start === sig) || null : IL.routeFrom(sig));
+
   const UI = { mode: 'train', start: null, cands: [], selected: null, tab: 'trains' };
 
   function h(tag, attrs, ...kids) {
@@ -70,7 +80,17 @@
   }
 
   function trySet(c, invite) {
-    const res = IL.set(c, { invite });
+    if (!allowed('routes')) return;
+    if (remote()) {
+      resetSel();
+      $('#hint').textContent = HINTS[UI.mode];
+      RS.Net.cmd('route', { start: c.start, kind: c.kind, key: c.end.sig || c.end.node, invite: !!invite }, (res) => routeResult(c, res));
+      return;
+    }
+    routeResult(c, IL.set(c, { invite }));
+  }
+
+  function routeResult(c, res) {
     if (res.ok) {
       resetSel();
       $('#hint').textContent = HINTS[UI.mode];
@@ -88,14 +108,16 @@
   function clickSignal(id) {
     const sig = T.signals[id];
     const m = UI.mode;
+    if (m === 'switch') return;
+    if (!allowed('routes')) return;
     if (m === 'cancel') {
-      const r = IL.routeFrom(id);
+      const r = routeFromAny(id);
       if (!r) return UI.toast('От светофора ' + id + ' маршрут не задан', 'info');
+      if (remote()) return RS.Net.cmd('cancelSig', { sig: id });
       const res = IL.cancel(r.id);
       if (!res.ok && res.why) UI.toast(res.why, 'warn');
       return;
     }
-    if (m === 'switch') return;
     // выбор конечного светофора
     if (UI.start && UI.start !== id) {
       const c = UI.cands.find((x) => x.end.sig === id);
@@ -105,10 +127,11 @@
     if (m === 'invite' && sig.kind !== 'entry' && sig.kind !== 'exit') return UI.toast('Пригласительный сигнал есть только на входных и выходных светофорах', 'info');
     if (kind === 'train' && !sig.train) return UI.toast('Светофор ' + id + ' не открывается поездным показанием. Для маневров выберите «Маневровый маршрут».', 'info');
     if (kind === 'shunt' && !sig.shunt) return UI.toast('Светофор ' + id + ' не имеет маневрового показания', 'info');
-    const ex = IL.routeFrom(id);
+    const ex = routeFromAny(id);
     if (ex && m === 'invite' && ex.invite) {
-      const r = IL.inviteAgain(id);
-      return UI.toast(r.ok ? 'Пригласительный сигнал на ' + id + ' включён повторно' : r.why, r.ok ? 'info' : 'warn');
+      const told = (r) => UI.toast(r.ok ? 'Пригласительный сигнал на ' + id + ' включён повторно' : r.why, r.ok ? 'info' : 'warn');
+      if (remote()) return RS.Net.cmd('invite', { sig: id }, told);
+      return told(IL.inviteAgain(id));
     }
     if (ex) return UI.toast('От светофора ' + id + ' уже задан маршрут ' + ex.title + '. Сначала отмените его.', 'info');
     const cands = IL.findRoutes(id, kind);
@@ -123,6 +146,8 @@
   function clickSegment(segId) {
     const sec = T.segs[segId].sec;
     if (UI.mode === 'cancel') {
+      if (!allowed('routes')) return;
+      if (remote()) return RS.Net.cmd('cancelSec', { sec });
       const s = T.sections[sec];
       if (s.lock) {
         const res = IL.cancel(s.lock);
@@ -139,7 +164,8 @@
   }
 
   function clickSwitch(gid) {
-    if (UI.start) return;
+    if (UI.start || !allowed('routes')) return;
+    if (remote()) return RS.Net.cmd('switch', { gid });
     const res = IL.toggleSwitch(gid);
     if (!res.ok) UI.toast(res.why, 'warn');
   }
@@ -158,6 +184,10 @@
       }
     });
     svg.addEventListener('pointermove', (e) => {
+      if (RS.Net && RS.Net.room) {
+        const w = R.toWorld(e.clientX, e.clientY);
+        RS.Net.cursor(w.x, w.y);
+      }
       const p = ptrs.get(e.pointerId);
       if (!p) return;
       if (ptrs.size === 2) {
@@ -187,6 +217,7 @@
     };
     svg.addEventListener('pointerup', end);
     svg.addEventListener('pointercancel', end);
+    svg.addEventListener('pointerleave', () => { if (RS.Net && RS.Net.room) RS.Net.cursor(null); });
     svg.addEventListener('wheel', (e) => {
       e.preventDefault();
       R.zoomAt(e.clientX, e.clientY, Math.exp(e.deltaY * 0.0015));
@@ -195,6 +226,8 @@
       const t = e.target.closest('[data-sig]');
       if (!t) return;
       e.preventDefault();
+      if (!allowed('routes')) return;
+      if (remote()) return RS.Net.cmd('cancelSig', { sig: t.dataset.sig });
       const r = IL.routeFrom(t.dataset.sig);
       if (r) IL.cancel(r.id);
     });
@@ -243,10 +276,35 @@
   }
 
   function takeControl(c) {
+    if (!allowed('trains')) return;
     const sd = C.screenDir(c);
     c.ctl = 'manual';
     c.setDir = c.v > 0.05 ? sd * c.move : 0;
     c.setV = Math.min(40, Math.max(5, Math.round(c.v * 3.6)));
+    if (remote()) RS.Net.cmd('ctl', { id: c.id, ctl: 'manual', setDir: c.setDir, setV: c.setV });
+    renderTrainCard(true);
+  }
+
+  function setDir(c, d) {
+    if (!allowed('trains')) return;
+    c.setDir = d;
+    if (remote()) RS.Net.cmd('ctl', { id: c.id, setDir: d });
+    renderTrainCard();
+  }
+
+  let vTimer = null;
+  function setV(c, v) {
+    c.setV = v;
+    if (!remote()) return;
+    clearTimeout(vTimer);
+    vTimer = setTimeout(() => RS.Net.cmd('ctl', { id: c.id, setV: v }), 150);
+  }
+
+  function returnAi(c) {
+    if (!allowed('trains')) return;
+    c.ctl = 'ai';
+    c.setDir = 0;
+    if (remote()) RS.Net.cmd('ctl', { id: c.id, ctl: 'ai' });
     renderTrainCard(true);
   }
 
@@ -318,14 +376,18 @@
       } else {
         const rng = h('input', { type: 'range', min: 0, max: 40, step: 1, value: c.setV, id: 'spd-' + c.id, 'aria-label': 'Заданная скорость' });
         const out = h('output', { for: 'spd-' + c.id }, c.setV + ' км/ч');
-        rng.oninput = () => { c.setV = Number(rng.value); out.textContent = rng.value + ' км/ч'; };
-        const dirBtn = (d, label, tip) => h('button', { class: 'btn dir', 'data-dir': d, title: tip, onclick: () => { c.setDir = d; renderTrainCard(); } }, label);
+        rng.oninput = () => {
+          if (!allowed('trains')) { rng.value = c.setV; return; }
+          out.textContent = rng.value + ' км/ч';
+          setV(c, Number(rng.value));
+        };
+        const dirBtn = (d, label, tip) => h('button', { class: 'btn dir', 'data-dir': d, title: tip, onclick: () => setDir(c, d) }, label);
         box.append(h('div', { class: 'tc-ctl' },
           h('div', { class: 'dirs', role: 'group', 'aria-label': 'Направление' }, dirBtn(-1, '◀ Влево', 'Движение влево по схеме'), dirBtn(0, '■ Стоп', 'Остановиться'), dirBtn(1, 'Вправо ▶', 'Движение вправо по схеме')),
           h('label', { class: 'spd', for: 'spd-' + c.id }, 'Скорость', rng, out),
           h('p', { class: 'muted small' }, 'Защита КЛУБ-У остановит состав перед запрещающим сигналом, упором, границей станции и неготовой стрелкой. Сцепление — автоматически при подъезде.'),
           info.dir && !['cut', 'shunt', 'light'].includes(info.cat)
-            ? h('button', { class: 'btn ghost', onclick: () => { c.ctl = 'ai'; c.setDir = 0; renderTrainCard(true); } }, 'Вернуть автоведение')
+            ? h('button', { class: 'btn ghost', onclick: () => returnAi(c) }, 'Вернуть автоведение')
             : null));
       }
     }
@@ -345,7 +407,7 @@
         }));
       }
       const v = c.vehicles[i];
-      const title = (v.loco ? v.type : (C.VEH[v.type].title || v.type)) + ' №' + v.num + (v.dest === LAY.station ? ' — назначением на ст. ' + LAY.station : '');
+      const title = (v.loco ? v.type : (C.VEH[v.type].title || v.type)) + (v.num ? ' №' + v.num : '') + (v.dest === LAY.station ? ' — назначением на ст. ' + LAY.station : '');
       strip.append(h('span', { class: 'vb v-' + v.kind + (v.dest === LAY.station ? ' dest' : ''), role: 'listitem', title, style: 'flex-grow:' + v.len }));
     });
     box.append(h('div', { class: 'strip-wrap' }, h('div', { class: 'strip-cap muted small' }, sd > 0 ? '← хвост · голова →' : '← голова · хвост →'), strip));
@@ -353,7 +415,9 @@
   }
 
   function doSplit(c, k) {
+    if (!allowed('trains')) return;
     if (c.v > 0.05) return UI.toast('Расцепка только после полной остановки', 'warn');
+    if (remote()) return RS.Net.cmd('split', { id: c.id, k });
     if (c.ctl === 'ai') { c.ctl = 'manual'; c.setDir = 0; }
     const r = C.split(c, k);
     if (!r) return UI.toast('Здесь расцепить нельзя', 'warn');
@@ -507,30 +571,47 @@
     return ['Проверка условий', 'st-set'];
   }
 
+  // Строки вкладки «Маршруты»: у подключившегося игрока — от ведущего.
+  function routeRows() {
+    if (remote()) return RS.Net.routes;
+    return IL.routes.map((r) => {
+      const [st, cls] = routeState(r);
+      return { id: r.id, start: r.start, title: r.title, kind: r.kind, st, cls, closed: r.closed, used: r.used, invite: r.invite,
+        busy: r.cancelT > 0 || r.cancelling, sw: Object.entries(r.req).map(([g, p]) => g + (p === 'plus' ? '+' : '−')).join(' ') };
+    });
+  }
+  UI.routeRows = routeRows;
+
+  function routeAction(op, id) {
+    if (!allowed('routes')) return;
+    if (remote()) return RS.Net.cmd(op, { rid: id });
+    const x = op === 'cancel' ? IL.cancel(id) : IL.reopen(id);
+    if (!x.ok && x.why) UI.toast(x.why, 'warn');
+  }
+
   function renderRoutes() {
     const ul = $('#routeList');
-    const key = IL.routes.map((r) => r.id + ':' + routeState(r)[1] + ':' + r.closed).join(',');
+    const rows = routeRows();
+    const key = rows.map((r) => r.id + ':' + r.cls + ':' + r.closed + ':' + r.busy).join(',');
     if (ul.dataset.key !== key) {
       ul.dataset.key = key;
       ul.innerHTML = '';
-      if (!IL.routes.length) ul.append(h('li', { class: 'muted small empty' }, 'Маршрутов нет. Выберите режим и нажмите светофор начала маршрута.'));
-      for (const r of IL.routes) {
-        const sw = Object.entries(r.req).map(([g, p]) => g + (p === 'plus' ? '+' : '−')).join(' ');
+      if (!rows.length) ul.append(h('li', { class: 'muted small empty' }, 'Маршрутов нет. Выберите режим и нажмите светофор начала маршрута.'));
+      for (const r of rows) {
         ul.append(h('li', { class: 'rrow ' + r.kind, 'data-id': r.id },
           h('div', { class: 'rtitle' }, h('span', { class: 'rk' }, r.kind === 'train' ? 'П' : 'М'), r.title),
-          h('div', { class: 'rmeta small' }, h('span', { class: 'rst' }, ''), h('span', { class: 'muted' }, 'стрелки: ' + (sw || '—'))),
+          h('div', { class: 'rmeta small' }, h('span', { class: 'rst' }, ''), h('span', { class: 'muted' }, 'стрелки: ' + (r.sw || '—'))),
           h('div', { class: 'ractions' },
-            r.closed && !r.used && !r.cancelT && !r.cancelling ? h('button', { class: 'btn ghost sm', onclick: () => IL.reopen(r.id) }, 'Повторно открыть') : null,
-            !r.cancelT && !r.cancelling ? h('button', { class: 'btn ghost sm', onclick: () => { const x = IL.cancel(r.id); if (!x.ok && x.why) UI.toast(x.why, 'warn'); } }, 'Отменить') : null)));
+            r.closed && !r.used && !r.busy ? h('button', { class: 'btn ghost sm', onclick: () => routeAction('reopen', r.id) }, 'Повторно открыть') : null,
+            !r.busy ? h('button', { class: 'btn ghost sm', onclick: () => routeAction('cancel', r.id) }, 'Отменить') : null)));
       }
     }
     for (const li of ul.children) {
-      const r = IL.byId(Number(li.dataset.id));
+      const r = rows.find((x) => String(x.id) === li.dataset.id);
       if (!r) continue;
-      const [st, cls] = routeState(r);
       const e = li.querySelector('.rst');
-      if (e.textContent !== st) e.textContent = st;
-      e.className = 'rst ' + cls;
+      if (e.textContent !== r.st) e.textContent = r.st;
+      e.className = 'rst ' + r.cls;
     }
   }
 
@@ -549,52 +630,80 @@
     $('#stPassed').textContent = s.passed;
     $('#stArrived').textContent = s.arrived;
     $('#stWait').textContent = Math.round(s.waitMin);
-    $('#stInc').textContent = s.incidents.length;
+    $('#stInc').textContent = s.incN !== undefined ? s.incN : s.incidents.length;
     const ul = $('#incList');
     if (ul.childElementCount !== s.incidents.length) {
       ul.innerHTML = '';
       for (const i of s.incidents.slice(-6).reverse()) ul.append(h('li', {}, RS.fmtTime(i.t) + ' — ' + i.text));
     }
-    const mode = RS.Traffic.settings.mode;
     for (const k of ['odd', 'even']) {
-      let txt = '—';
-      if (mode === 'random') txt = 'через ' + Math.max(0, Math.ceil(RS.Traffic.next[k] / 60)) + ' мин';
-      if (mode === 'schedule') {
-        const e = RS.Schedule.entries.find((x) => x.dir === k && x.state === 'plan');
-        if (e) txt = '№' + e.num + ', ' + (e.kind === 'pass' ? 'проследование ' : 'прибытие ') + RS.Schedule.hm(e.arr);
-      }
+      const txt = UI.nextText(k);
       const el = $(k === 'odd' ? '#nextOdd' : '#nextEven');
       if (el.textContent !== txt) el.textContent = txt;
     }
   }
 
+  // Ближайший поезд с каждой стороны — для вкладки «Движение».
+  UI.nextText = function (k) {
+    if (remote()) return RS.Net.next[k] || '—';
+    const mode = RS.Traffic.settings.mode;
+    if (mode === 'random') return 'через ' + Math.max(0, Math.ceil(RS.Traffic.next[k] / 60)) + ' мин';
+    if (mode === 'schedule') {
+      const e = RS.Schedule.entries.find((x) => x.dir === k && x.state === 'plan');
+      if (e) return '№' + e.num + ', ' + (e.kind === 'pass' ? 'проследование ' : 'прибытие ') + RS.Schedule.hm(e.arr);
+    }
+    return '—';
+  };
+
   function bindFlow() {
     const s = RS.Traffic.settings;
     const gap = $('#genGap');
     document.querySelectorAll('input[name="genMode"]').forEach((r) => {
-      r.checked = r.value === s.mode;
       r.onchange = () => {
         if (!r.checked) return;
-        RS.Traffic.setMode(r.value);
+        if (!allowed('flow')) return UI.syncFlow();
+        if (remote()) RS.Net.cmd('mode', { mode: r.value });
+        else RS.Traffic.setMode(r.value);
         gap.disabled = r.value !== 'random';
       };
     });
-    gap.disabled = s.mode !== 'random';
     const ar = $('#autoRoute');
-    ar.checked = s.autoRoute;
-    ar.onchange = () => { s.autoRoute = ar.checked; RS.Log.add('Автодействие ' + (ar.checked ? 'включено' : 'выключено'), 'info'); };
-    const out = $('#genGapOut');
-    const upd = () => { const v = Number(gap.value); s.minGap = Math.max(1, v - 2); s.maxGap = v + 3; out.textContent = 'каждые ' + s.minGap + '–' + s.maxGap + ' мин'; };
-    gap.oninput = upd;
-    upd();
+    ar.onchange = () => {
+      if (!allowed('flow')) return UI.syncFlow();
+      if (remote()) return RS.Net.cmd('autoRoute', { on: ar.checked });
+      s.autoRoute = ar.checked;
+      RS.Log.add('Автодействие ' + (ar.checked ? 'включено' : 'выключено'), 'info');
+    };
+    gap.oninput = () => {
+      if (!allowed('flow')) return UI.syncFlow();
+      const v = Number(gap.value);
+      s.minGap = Math.max(1, v - 2);
+      s.maxGap = v + 3;
+      UI.syncFlow();
+      if (remote()) RS.Net.cmd('gap', { v });
+    };
     document.querySelectorAll('[data-spawn]').forEach((b) => {
       b.onclick = () => {
+        if (!allowed('flow')) return;
         const cat = $('#spawnCat').value || null;
+        if (remote()) return RS.Net.cmd('spawn', { dir: b.dataset.spawn, cat });
         const c = RS.Traffic.spawn(b.dataset.spawn, cat);
         if (!c) UI.toast('Участок приближения занят — поезд появится позже', 'info');
       };
     });
+    UI.syncFlow();
   }
+
+  // Органы управления вкладки «Движение» показывают настройки той модели, что идёт сейчас.
+  UI.syncFlow = function () {
+    const s = RS.Traffic.settings;
+    document.querySelectorAll('input[name="genMode"]').forEach((r) => (r.checked = r.value === s.mode));
+    $('#autoRoute').checked = !!s.autoRoute;
+    const gap = $('#genGap');
+    gap.disabled = s.mode !== 'random';
+    if (document.activeElement !== gap) gap.value = s.minGap + 2;
+    $('#genGapOut').textContent = 'каждые ' + s.minGap + '–' + s.maxGap + ' мин';
+  };
 
   // --- вкладки, время, справка ------------------------------------------------------------------
   function showTab(t) {
@@ -625,10 +734,54 @@
   }
 
   function setSpeed(k) {
+    if (!allowed('flow')) return;
+    if (remote()) return RS.Net.cmd('speed', { k });
     if (RS.Sim.scale) UI.lastSpeed = RS.Sim.scale;
     RS.Sim.scale = k;
-    document.querySelectorAll('[data-speed]').forEach((b) => b.setAttribute('aria-pressed', String(Number(b.dataset.speed) === k)));
+    UI.syncSpeed();
   }
+  UI.setSpeed = setSpeed;
+  UI.syncSpeed = function () {
+    if (RS.Sim.scale) UI.lastSpeed = RS.Sim.scale;
+    document.querySelectorAll('[data-speed]').forEach((b) => b.setAttribute('aria-pressed', String(Number(b.dataset.speed) === RS.Sim.scale)));
+  };
+
+  // --- совместная игра: панель игроков -----------------------------------------------------------
+  UI.renderNet = function () {
+    const N = RS.Net;
+    const btn = $('#btnNet');
+    if (!btn || !N) return;
+    const room = !!N.room;
+    const people = room ? N.peers.length || 1 : 1;
+    btn.textContent = !room ? 'Одиночная игра' : people > 1 ? 'Игроков: ' + people : 'Совместная игра';
+    btn.classList.toggle('live', room && people > 1);
+    const status = $('#netStatus');
+    let txt;
+    if (!room) {
+      txt = N.optedOut()
+        ? 'Вы играете отдельно от остальных, кто открыл эту страницу.'
+        : 'Совместная игра работает на странице, опубликованной в claude.ai. В локальном файле — только одиночная.';
+    } else if (N.mode === 'client') txt = 'Модель станции ведёт ' + N.nameOf(N.hostPeer) + '. Ваши действия выполняются у него, все видят одно и то же.';
+    else if (N.mode === 'host') txt = 'Модель станции идёт у вас, остальные видят её и управляют вместе с вами. Не закрывайте вкладку.';
+    else txt = 'Пока вы одни. Кто откроет эту страницу, подключится к вашей смене.';
+    status.textContent = txt;
+    const ul = $('#netList');
+    ul.innerHTML = '';
+    for (const p of room ? N.peers : []) {
+      const me = p.isMe && p.sameTab;
+      const host = p.peer === N.hostPeer || (me && N.mode !== 'client');
+      const role = (p.presence && p.presence.role) || 'all';
+      ul.append(h('li', {},
+        h('i', { class: 'np-dot', style: 'background:' + N.colorOf(p) }),
+        h('span', { class: 'np-name' }, me ? 'Вы' : N.nameOf(p.peer)),
+        h('span', { class: 'np-role muted' }, N.roleTitle(role)),
+        host ? h('span', { class: 'chip np-host' }, 'ведущий') : null));
+    }
+    $('#netRole').value = N.role;
+    $('#netRoleRow').hidden = !room;
+    $('#netLeave').hidden = !room;
+    $('#netRejoin').hidden = room || !N.optedOut();
+  };
 
   // Справка: показания по ИСИ с изображением ламп.
   function buildHelp() {
@@ -647,8 +800,23 @@
     }
   }
 
+  function bindNet() {
+    const panel = $('#netPanel');
+    const btn = $('#btnNet');
+    btn.onclick = () => {
+      panel.hidden = !panel.hidden;
+      btn.setAttribute('aria-expanded', String(!panel.hidden));
+      UI.renderNet();
+    };
+    $('#netClose').onclick = () => { panel.hidden = true; btn.setAttribute('aria-expanded', 'false'); };
+    $('#netRole').onchange = () => RS.Net.setRole($('#netRole').value);
+    $('#netLeave').onclick = () => UI.ask('Играть отдельно?', 'Страница перезагрузится, и вы начнёте свою смену, не видя остальных. Вернуться можно кнопкой в этой же панели.', 'Играть отдельно', () => RS.Net.leave());
+    $('#netRejoin').onclick = () => RS.Net.rejoin();
+  }
+
   UI.init = function () {
     bindTop();
+    bindNet();
     bindBoard();
     bindFlow();
     buildHelp();
@@ -672,7 +840,13 @@
     if (UI.tab === 'flow') renderStats();
     renderApproach();
     $('#cntTrains').textContent = C.list.filter((c) => c.ctl === 'ai').length;
-    $('#cntRoutes').textContent = IL.routes.length;
+    $('#cntRoutes').textContent = remote() ? RS.Net.routes.length : IL.routes.length;
+  };
+
+  UI.routeState = routeState;
+  UI.resetSelection = function () {
+    resetSel();
+    $('#hint').textContent = HINTS[UI.mode];
   };
 
   RS.UI = UI;

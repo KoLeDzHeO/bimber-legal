@@ -24,24 +24,37 @@
     RS.Consist.computeOcc();
     RS.IL.update(0);
     RS.Render.update();
+    RS.Net.init();
     let last = performance.now();
     let acc = 0;
-    function frame(now) {
-      const real = Math.min(0.25, Math.max(0, (now - last) / 1000));
+    // Модель идёт у ведущего и в одиночной игре; у подключившегося игрока её нет.
+    function advance(now) {
+      const real = Math.min(document.hidden ? 2 : 0.25, Math.max(0, (now - last) / 1000));
       last = now;
-      acc += real * RS.Sim.scale;
-      let n = 0;
-      while (acc >= DT && n < 120) {
-        step(DT);
-        acc -= DT;
-        n++;
+      if (RS.Net.mode === 'solo' || RS.Net.mode === 'host') {
+        acc += real * RS.Sim.scale;
+        let n = 0;
+        while (acc >= DT && n < 240) {
+          step(DT);
+          acc -= DT;
+          n++;
+        }
+        if (n >= 240) acc = 0;
       }
-      if (n >= 120) acc = 0;
+      RS.Net.tick(real);
+      return real;
+    }
+    function frame(now) {
+      const real = advance(now);
       RS.Render.update();
       RS.UI.tick(real);
       requestAnimationFrame(frame);
     }
     requestAnimationFrame(frame);
+    // Вкладка ведущего в фоне: кадры не рисуются, но модель и рассылка идут по таймеру.
+    setInterval(() => {
+      if (document.hidden && RS.Net.mode === 'host') advance(performance.now());
+    }, 1000);
   }
 
   RS.step = step;

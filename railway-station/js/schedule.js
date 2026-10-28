@@ -115,7 +115,8 @@
 
   // Состав, в котором находится поездной локомотив этого поезда (в т.ч. после маневров).
   S.consistOf = function (e) {
-    return C.list.find((c) => c.vehicles.some((v) => v.owner && v.owner.info.plan === e)) || null;
+    return C.list.find((c) => c.vehicles.some((v) => v.owner && v.owner.info.plan === e)) ||
+      C.list.find((c) => c.info && c.info.planId === e.id) || null;
   };
 
   S.update = function () {
@@ -200,6 +201,7 @@
   };
 
   S.status = function (e, now) {
+    if (e.netStatus && RS.Net && RS.Net.isClient()) return e.netStatus;
     const late = S.deviation(e, now);
     const lateTxt = late > 0 ? ' · опаздывает +' + late + ' мин' : '';
     if (e.state === 'cancelled') return { text: 'отменён', cls: 'plan' };

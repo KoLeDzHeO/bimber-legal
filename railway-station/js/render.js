@@ -58,6 +58,7 @@
     R.gTrain = el('g', { class: 'trains' }, world);
     R.gSig = el('g', { class: 'signals' }, world);
     R.gSel = el('g', { class: 'sel' }, world);
+    R.gCur = el('g', { class: 'cursors' }, world);
     drawDecor();
     drawTracks();
     drawSwitches();
@@ -187,6 +188,7 @@
 
   // --- обновление ---------------------------------------------------------------------
   function sectionState(sec) {
+    if (RS.Net && RS.Net.isClient()) return (RS.Net.secStates && RS.Net.secStates[sec]) || 'free';
     const s = T.sections[sec];
     if (s.occupied) return 'occ';
     if (s.lock) {
@@ -290,12 +292,39 @@
     }
   }
 
+  // Курсоры других игроков совместной игры.
+  const curEls = {};
+  function updateCursors() {
+    const N = RS.Net;
+    const seen = new Set();
+    for (const p of N && N.room ? N.peers : []) {
+      const cur = p.presence && p.presence.cur;
+      if ((p.isMe && p.sameTab) || !Array.isArray(cur)) continue;
+      seen.add(p.peer);
+      let e = curEls[p.peer];
+      if (!e) {
+        const g = el('g', { class: 'peer-cur' }, R.gCur);
+        e = curEls[p.peer] = { g, dot: el('path', { d: 'M0 0L0 13L4 9.5L7 15L9 14L6.5 8.5L11 8.5Z', class: 'cur-arrow' }, g), t: text(g, 12, 20, '', 'cur-name', 'start') };
+      }
+      const color = N.colorOf(p);
+      e.dot.setAttribute('fill', color);
+      e.t.setAttribute('fill', color);
+      e.t.textContent = N.nameOf(p.peer) + ' · ' + N.roleTitle((p.presence && p.presence.role) || 'all');
+      e.g.setAttribute('transform', 'translate(' + Number(cur[0]) + ' ' + Number(cur[1]) + ')');
+    }
+    for (const id of Object.keys(curEls)) {
+      if (!seen.has(id)) { curEls[id].g.remove(); delete curEls[id]; }
+    }
+  }
+
   R.update = function () {
     updateTracks();
     updateSwitches();
     updateSignals();
     updateTrains();
+    updateCursors();
   };
+  R.sectionState = sectionState;
 
   // --- подсветка при наборе маршрута -------------------------------------------------
   R.highlight = function (startSig, cands) {

@@ -21,9 +21,11 @@
   RS.Log = {
     items: [],
     add(text, type) {
-      this.items.unshift({ t: RS.Sim ? RS.Sim.t : 0, text, type: type || 'info' });
+      const item = { t: RS.Sim ? RS.Sim.t : 0, text, type: type || 'info' };
+      this.items.unshift(item);
       if (this.items.length > 200) this.items.pop();
       this.dirty = true;
+      if (RS.Net) RS.Net.onLog(item);
       if (RS.UI && (type === 'bad' || type === 'warn')) RS.UI.toast(text, type);
     },
   };

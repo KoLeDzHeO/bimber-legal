@@ -34,6 +34,7 @@
       <button class="seg-btn" data-speed="6" aria-pressed="false">×6</button>
       <button class="seg-btn" data-speed="12" aria-pressed="false">×12</button>
     </div>
+    <button class="btn ghost" id="btnNet" aria-expanded="false" aria-controls="netPanel">Одиночная игра</button>
     <button class="btn ghost" id="btnPanel" aria-pressed="false" title="Убрать боковую панель, чтобы схема стала крупнее">Табло шире</button>
     <button class="btn ghost" id="btnHelp">Сигналы и справка</button>
   </header>
@@ -142,6 +143,27 @@
     </aside>
   </main>
 
+  <section class="netpanel" id="netPanel" hidden aria-label="Совместная игра">
+    <div class="np-head">
+      <h4>Совместная игра</h4>
+      <button class="btn ghost sm" id="netClose">Закрыть</button>
+    </div>
+    <p class="small" id="netStatus"></p>
+    <ul class="np-list" id="netList"></ul>
+    <label class="field" id="netRoleRow" for="netRole"><span>Моя роль</span>
+      <select id="netRole">
+        <option value="all">ДСП и машинист</option>
+        <option value="dsp">ДСП: маршруты, стрелки, движение</option>
+        <option value="driver">Машинист: управление составами</option>
+      </select>
+    </label>
+    <p class="small muted">Как пригласить: в меню «Поделиться» этой страницы добавьте человека. Чтобы он мог управлять, нужен доступ не ниже «Участник»; с доступом «Читатель» можно только смотреть. Модель станции идёт у того, кто открыл страницу первым, — его вкладку не закрывайте.</p>
+    <div class="np-actions">
+      <button class="btn ghost sm" id="netLeave">Играть отдельно</button>
+      <button class="btn ghost sm" id="netRejoin" hidden>Вернуться в общую игру</button>
+    </div>
+  </section>
+
   <div class="toasts" id="toasts" aria-live="polite"></div>
   <div class="modal" id="modal" hidden></div>
 
@@ -160,6 +182,7 @@
             <li><b>Отправление.</b> Нажмите выходной светофор пути (<b>НI, Н3…</b> справа, <b>ЧII, Ч4…</b> слева) — маршрут на перегон задаётся сразу.</li>
             <li><b>Сквозной пропуск.</b> Задайте сначала отправление, затем приём: входной загорится зелёным (по главному пути) или двумя жёлтыми с верхним мигающим (с отклонением).</li>
             <li><b>Маневры.</b> Режим «Маневровый», нажмите М1 (путь 10), М2 (путь 9), М4 (путь 8) или выходной светофор и путь назначения. Ведите локомотив вручную в карточке состава, сцепление происходит автоматически, расцепка — кнопкой между вагонами.</li>
+            <li><b>Вдвоём.</b> Кнопка вверху справа открывает панель совместной игры: кто ещё открыл эту страницу, какие у кого роли (ДСП или машинист). Модель идёт у ведущего, остальные управляют вместе с ним.</li>
             <li><b>Сборный поезд.</b> Хвостовые вагоны с жёлтой обводкой отцепите и подайте маневровым локомотивом на путь 8 (грузовой двор).</li>
           </ol>
           <h4>Индикация на табло</h4>
@@ -189,6 +212,7 @@
 <script src="js/schedule.js"></script>
 <script src="js/render.js"></script>
 <script src="js/ui.js"></script>
+<script src="js/net.js"></script>
 <script src="js/main.js"></script>
 <!-- page:end -->
 </body>

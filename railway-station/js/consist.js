@@ -131,7 +131,10 @@
     if (RS.UI && RS.UI.selected === c.id) RS.UI.selected = null;
   };
 
+  // C.ghost — состав двигается только для показа (у подключившегося игрока):
+  // ни светофоры, ни стрелки при этом не учитываются, модель идёт у ведущего.
   function passNode(c, node, fromSeg, nx) {
+    if (C.ghost) return;
     const sig = T.signalFor(node, fromSeg);
     if (sig) c.lastSig = { id: sig.id, aspect: sig.aspect, kind: sig.kind };
     if (nx.trailing && nx.wrong) RS.IL.cutSwitch(nx.sw, nx.branch);
@@ -169,9 +172,9 @@
           break;
         }
         // хвост проходит узел против направления цепочки — светофоры ему навстречу
-        const sig = T.signalFor(node, c0.seg);
+        const sig = !C.ghost && T.signalFor(node, c0.seg);
         if (sig) c.lastSig = { id: sig.id, aspect: sig.aspect, kind: sig.kind };
-        if (nx.trailing && nx.wrong) RS.IL.cutSwitch(nx.sw, nx.branch);
+        if (!C.ghost && nx.trailing && nx.wrong) RS.IL.cutSwitch(nx.sw, nx.branch);
         ch.unshift({ seg: nx.seg, dir: -nx.dir });
         rear += L(nx.seg);
       }
@@ -544,5 +547,6 @@
     }
   };
 
+  C.fixRear = fixRear;
   RS.Consist = C;
 })();
